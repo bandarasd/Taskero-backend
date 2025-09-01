@@ -7,7 +7,7 @@ const {
 
 const router = express.Router();
 
-router.post("/threads", getOrCreateThread);
+router.post("/thread", getOrCreateThread);
 router.post("/messages", sendMessage);
 router.get("/messages/:thread_id", getMessagesByThread);
 
