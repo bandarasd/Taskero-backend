@@ -1,13 +1,57 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
+// require('dotenv').config();
+// const express = require('express');
+// const cors = require('cors');
+
+// const app = express();
+// app.use(cors());
+// app.use(express.json());
+
+// // Health check
+// app.get('/health', (req, res) => res.json({ status: 'email-service running' }));
+
+// const PORT = process.env.PORT || 5000;
+// app.listen(PORT, () => console.log('email-service listening on port', PORT));
+
+require("dotenv").config();
+const express = require("express");
+const nodemailer = require("nodemailer");
 
 const app = express();
-app.use(cors());
 app.use(express.json());
 
-// Health check
-app.get('/health', (req, res) => res.json({ status: 'email-service running' }));
+// Create reusable transporter
+const transporter = nodemailer.createTransport({
+  host: process.env.EMAIL_HOST,
+  port: process.env.EMAIL_PORT,
+  secure: false, // true for 465, false for 587
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log('email-service listening on port', PORT));
+// Test route
+app.get("/", (req, res) => res.send("Email service running"));
+
+// Send email route
+app.post("/send", async (req, res) => {
+  const { to, subject, text, html } = req.body;
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"Taskero" <${process.env.EMAIL_USER}>`,
+      to,
+      subject,
+      text,
+      html,
+    });
+
+    res.status(200).json({ message: "Email sent", info });
+  } catch (err) {
+    console.error("Error sending email:", err);
+    res.status(500).json({ error: "Failed to send email" });
+  }
+});
+
+const PORT = process.env.PORT || 5001;
+app.listen(PORT, () => console.log(`Email service running on port ${PORT}`));
