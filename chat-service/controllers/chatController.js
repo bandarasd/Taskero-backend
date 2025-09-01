@@ -2,18 +2,18 @@ const pool = require("../db");
 
 // Get or create thread
 exports.getOrCreateThread = async (req, res) => {
-  const { customerId, taskerId } = req.body;
+  const { customer_id, tasker_id } = req.body;
 
   try {
     let thread = await pool.query(
       `SELECT * FROM chat_threads WHERE customer_id = $1 AND tasker_id = $2`,
-      [customerId, taskerId]
+      [customer_id, tasker_id]
     );
 
     if (thread.rows.length === 0) {
       const result = await pool.query(
-        `INSERT INTO chat_threads (customerId, taskerId) VALUES ($1, $2) RETURNING *`,
-        [customerId, taskerId]
+        `INSERT INTO chat_threads (customer_id, tasker_id) VALUES ($1, $2) RETURNING *`,
+        [customer_id, tasker_id]
       );
       thread = result;
     }
