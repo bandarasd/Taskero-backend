@@ -1,6 +1,8 @@
 {
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "db-migrate": "^0.11.14",
+    "db-migrate-pg": "^1.5.2"
   },
   "scripts": {
     "start:all": "concurrently \"npm run dev --prefix user-service\" \"npm run dev --prefix task-service\" \"npm run dev --prefix order-service\" \"npm run dev --prefix payment-service\" \"npm run dev --prefix search-service\" \"npm run dev --prefix notification-service\" \"npm run dev --prefix email-service\""

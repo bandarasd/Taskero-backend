@@ -15,5 +15,8 @@ app.use("/gigs", require("./routes/gigRoutes"));
 // Task routes
 app.use("/tasks", require("./routes/taskRoutes"));
 
+// Review routes
+app.use("/review", require("./routes/reviewRoutes"));
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("task-service listening on port", PORT));
