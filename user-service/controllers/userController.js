@@ -119,3 +119,41 @@ exports.deleteUser = async (req, res) => {
     res.status(500).json({ error: "Database error" });
   }
 };
+
+// Upload profile picture
+exports.uploadProfilePicture = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Check if user exists
+    const userCheck = await pool.query("SELECT id FROM users WHERE id = $1", [
+      id,
+    ]);
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Check if file was uploaded
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    // Get the Cloudinary URL from the uploaded file
+    const avatarUrl = req.file.path;
+
+    // Update user's avatar_url in database
+    const result = await pool.query(
+      "UPDATE users SET avatar_url = $1, updated_at = NOW() WHERE id = $2 RETURNING id, first_name, last_name, email, avatar_url",
+      [avatarUrl, id]
+    );
+
+    res.json({
+      message: "Profile picture uploaded successfully",
+      user: result.rows[0],
+      cloudinary_url: avatarUrl,
+    });
+  } catch (error) {
+    console.error("Profile picture upload error:", error);
+    res.status(500).json({ error: "Failed to upload profile picture" });
+  }
+};
