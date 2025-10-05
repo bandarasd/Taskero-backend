@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const pool = require("./db");
 const userRoutes = require("./routes/userRoutes");
+const verificationRoutes = require("./routes/verificationRoutes");
 
 const app = express();
 app.use(cors());
@@ -13,6 +14,7 @@ app.get("/health", (req, res) => res.json({ status: "User service running" }));
 
 // User routes
 app.use("/users", userRoutes);
+app.use("/verifications", verificationRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("user-service listening on port", PORT));
