@@ -14,6 +14,8 @@ app.get("/health", (req, res) => res.json({ status: "User service running" }));
 
 // User routes
 app.use("/users", userRoutes);
+
+// Verification routes (can be accessed as /verifications/... or /users/.../verifications/...)
 app.use("/verifications", verificationRoutes);
 
 const PORT = process.env.PORT || 5000;
