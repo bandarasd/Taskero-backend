@@ -9,7 +9,8 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(morgan("dev")); // Request logging
-app.use(express.json());
+// NOTE: Do NOT add express.json() here — it consumes the request body stream,
+// which prevents http-proxy-middleware from forwarding the body to downstream services.
 
 // Service URLs from environment variables
 const services = {
@@ -61,7 +62,8 @@ app.get("/health/all", async (req, res) => {
 // ============== Route Proxies ==============
 // Routes are mapped to match the actual service endpoints
 
-// User Service: /users/*, /verifications/*
+// User Service: /auth/*, /users/*, /verifications/*
+app.use("/auth", createProxy(services.users));
 app.use("/users", createProxy(services.users));
 app.use("/verifications", createProxy(services.users));
 

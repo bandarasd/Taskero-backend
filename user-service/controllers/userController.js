@@ -1,4 +1,14 @@
+const bcrypt = require("bcryptjs");
 const pool = require("../db");
+
+// Normalize phone: decodeURIComponent turns '+' into a space, so we fix it back
+const normalizePhone = (raw) => {
+  let p = decodeURIComponent(String(raw)).trim();
+  // After decoding, a leading space means the original was a '+'
+  if (p.startsWith(" ")) p = "+" + p.slice(1);
+  if (!p.startsWith("+")) p = "+" + p;
+  return p;
+};
 
 // Get all users
 exports.getUsers = async (req, res) => {
@@ -25,13 +35,34 @@ exports.getUserById = async (req, res) => {
   }
 };
 
+// Lookup user by phone number
+exports.getUserByPhone = async (req, res) => {
+  const phoneNumber = normalizePhone(req.params.phoneNumber);
+  console.log(`[getUserByPhone] raw: "${req.params.phoneNumber}" → normalised: "${phoneNumber}"`);
+  try {
+    const result = await pool.query(
+      "SELECT * FROM users WHERE phone_number = $1",
+      [phoneNumber]
+    );
+    if (result.rows.length === 0)
+      return res.status(404).json({ error: "User not found" });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Database error" });
+  }
+};
+
 // Create a new user
+// If a user with this phone_number already exists, return them instead of creating a duplicate.
 exports.createUser = async (req, res) => {
-  const {
+    const {
     email,
     first_name,
     last_name,
     phone_number,
+    password, 
+    role, // New field
     avatar_url,
     bio,
     dob,
@@ -45,15 +76,35 @@ exports.createUser = async (req, res) => {
     settings,
   } = req.body;
   try {
+    // If phone already exists, return the existing user (prevents duplicate registrations)
+    if (phone_number) {
+      const existing = await pool.query(
+        "SELECT * FROM users WHERE phone_number = $1",
+        [normalizePhone(phone_number)]
+      );
+      if (existing.rows.length > 0) {
+        return res.status(200).json(existing.rows[0]);
+      }
+    }
+
+    // Hash password if provided
+    let passwordHash = null;
+    if (password) {
+      const salt = await bcrypt.genSalt(10);
+      passwordHash = await bcrypt.hash(password, salt);
+    }
+
     const result = await pool.query(
       `INSERT INTO users 
-      (email, first_name, last_name, phone_number, avatar_url, bio, dob, gender, address_line1, address_line2, city, postal_code, location, preferences, settings)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      (email, first_name, last_name, phone_number, password_hash, role, avatar_url, bio, dob, gender, address_line1, address_line2, city, postal_code, location, preferences, settings)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
       [
         email,
         first_name,
         last_name,
         phone_number,
+        passwordHash,
+        role || 'customer',
         avatar_url,
         bio,
         dob,
