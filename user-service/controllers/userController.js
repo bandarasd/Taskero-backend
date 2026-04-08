@@ -61,8 +61,9 @@ exports.createUser = async (req, res) => {
     first_name,
     last_name,
     phone_number,
-    password, 
-    role, // New field
+    password,
+    role,
+    firebase_uid,
     avatar_url,
     bio,
     dob,
@@ -95,9 +96,9 @@ exports.createUser = async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO users 
-      (email, first_name, last_name, phone_number, password_hash, role, avatar_url, bio, dob, gender, address_line1, address_line2, city, postal_code, location, preferences, settings)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+      `INSERT INTO users
+      (email, first_name, last_name, phone_number, password_hash, role, firebase_uid, avatar_url, bio, dob, gender, address_line1, address_line2, city, postal_code, location, preferences, settings)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
       [
         email,
         first_name,
@@ -105,6 +106,7 @@ exports.createUser = async (req, res) => {
         phone_number,
         passwordHash,
         role || 'customer',
+        firebase_uid || null,
         avatar_url,
         bio,
         dob,

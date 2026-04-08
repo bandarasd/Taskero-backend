@@ -12,10 +12,11 @@ exports.createReview = async (req, res) => {
       return res.status(404).json({ error: "Task not found" });
     }
 
-    // Insert the review into the reviews table
+    // Insert the review into the reviews table (populate reviewer/tasker from the task)
     const result = await pool.query(
-      `INSERT INTO reviews(task_id, rating, review) VALUES ($1, $2, $3) RETURNING *`,
-      [task_id, rating, review]
+      `INSERT INTO reviews(task_id, gig_id, reviewer_id, tasker_id, rating, review)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [task_id, task.rows[0].gig_id, task.rows[0].customer_id, task.rows[0].tasker_id, rating, review]
     );
     return res.status(201).json(result.rows[0]);
   } catch (error) {

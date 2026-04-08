@@ -6,7 +6,7 @@ const GIG_SEARCH_SERVICE_URL = process.env.GIG_SEARCH_SERVICE_URL;
 // Helper: sync gig to Elasticsearch
 const syncGigToSearch = async (gig) => {
   try {
-    await axios.post(`${SEARCH_SERVICE_URL}/gigs`, gig);
+    await axios.post(`${GIG_SEARCH_SERVICE_URL}/gigs`, gig);
   } catch (err) {
     console.error("[ERROR] Syncing gig to search service failed:", err.message);
   }
@@ -15,7 +15,7 @@ const syncGigToSearch = async (gig) => {
 // Helper: delete gig from Elasticsearch
 const deleteGigFromSearch = async (id) => {
   try {
-    await axios.delete(`${SEARCH_SERVICE_URL}/gigs/${id}`);
+    await axios.delete(`${GIG_SEARCH_SERVICE_URL}/gigs/${id}`);
   } catch (err) {
     console.error(
       "[ERROR] Deleting gig from search service failed:",
@@ -70,6 +70,44 @@ exports.createGig = async (req, res) => {
     res.status(201).json(gig);
   } catch (error) {
     console.error("[ERROR] Creating gig failed:", error);
+    res.status(500).json({ error: "Database error" });
+  }
+};
+
+// Get all active gigs (for browse/home screen)
+exports.getAllGigs = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT g.*, u.first_name, u.last_name, u.avatar_url
+       FROM gigs g
+       JOIN users u ON g.tasker_id = u.id
+       WHERE g.is_active = true
+       ORDER BY g.created_at DESC`
+    );
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error("[ERROR] Fetching all gigs failed:", error);
+    res.status(500).json({ error: "Database error" });
+  }
+};
+
+// Get single gig by ID
+exports.getGigById = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT g.*, u.first_name, u.last_name, u.avatar_url
+       FROM gigs g
+       JOIN users u ON g.tasker_id = u.id
+       WHERE g.id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Gig not found" });
+    }
+    res.status(200).json(result.rows[0]);
+  } catch (error) {
+    console.error("[ERROR] Fetching gig failed:", error);
     res.status(500).json({ error: "Database error" });
   }
 };

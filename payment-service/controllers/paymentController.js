@@ -46,8 +46,8 @@ exports.createPayment = async (req, res) => {
 
     // Save payment in DB
     const result = await pool.query(
-      `INSERT INTO payments 
-      (task_id, payment_method, amount, currency, status, stripe_payment_id, receipt_url, paid_at)
+      `INSERT INTO payments
+      (task_id, payment_method, amount, currency, status, stripe_payment_intent_id, stripe_receipt_url, paid_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [
         task_id,
@@ -95,7 +95,7 @@ exports.markOfflinePaid = async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE payments 
-       SET status='paid', paid_at=NOW(), updated_at=NOW()
+       SET status='paid', paid_at=NOW()
        WHERE id = $1 RETURNING *`,
       [id]
     );

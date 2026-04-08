@@ -9,5 +9,9 @@ app.use(express.json());
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'notification-service running' }));
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log('notification-service listening on port', PORT));
+// Notification routes
+const notificationRoutes = require('./routes/notificationRoutes');
+app.use('/notifications', notificationRoutes);
+
+const PORT = process.env.PORT || 3006;
+app.listen(PORT, () => console.log(`notification-service listening on port ${PORT}`));

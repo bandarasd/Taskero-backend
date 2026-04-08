@@ -4,10 +4,11 @@ const {
   getPaymentByTask,
   markOfflinePaid,
 } = require("../controllers/paymentController");
+const verifyFirebaseToken = require("../../shared/middleware/auth");
 const router = express.Router();
 
-router.post("/", createPayment); // Create a payment (Stripe or offline)
-router.get("/task/:task_id", getPaymentByTask); // Get payment info for a task
-router.put("/offline/:id", markOfflinePaid); // Mark offline payment as paid
+router.post("/", verifyFirebaseToken, createPayment);
+router.get("/task/:task_id", verifyFirebaseToken, getPaymentByTask);
+router.put("/offline/:id", verifyFirebaseToken, markOfflinePaid);
 
 module.exports = router;

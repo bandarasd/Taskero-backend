@@ -12,5 +12,8 @@
     "db:migrate:reset": "db-migrate reset --config database.json --env dev",
     "db:setup": "npm run db:up && node scripts/wait-for-db.js && npm run db:migrate",
     "start:all": "concurrently \"npm run dev --prefix api-gateway\" \"npm run dev --prefix user-service\" \"npm run dev --prefix task-service\" \"npm run dev --prefix payment-service\" \"npm run dev --prefix search-service\" \"npm run dev --prefix notification-service\" \"npm run dev --prefix email-service\" \"npm run dev --prefix chat-service\""
+  },
+  "dependencies": {
+    "firebase-admin": "^13.7.0"
   }
 }
