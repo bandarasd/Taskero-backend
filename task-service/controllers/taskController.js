@@ -10,6 +10,7 @@ exports.createTask = async (req, res) => {
     estimated_price,
     due_date,
     attachments,
+    location,
   } = req.body;
   try {
     const gig = await pool.query(`SELECT tasker_id FROM gigs WHERE id = $1`, [
@@ -22,8 +23,8 @@ exports.createTask = async (req, res) => {
     const tasker_id = gig.rows[0].tasker_id;
 
     const result = await pool.query(
-      `INSERT INTO tasks(gig_id, customer_id, tasker_id, title, description, estimated_price, due_date, attachments)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      `INSERT INTO tasks(gig_id, customer_id, tasker_id, title, description, estimated_price, due_date, attachments, location)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
       [
         gig_id,
         customer_id,
@@ -33,6 +34,7 @@ exports.createTask = async (req, res) => {
         estimated_price,
         due_date,
         attachments,
+        location || null,
       ]
     );
     return res.status(201).json(result.rows[0]);

@@ -21,6 +21,23 @@ exports.getUsers = async (req, res) => {
   }
 };
 
+// Lookup user by Firebase UID
+exports.getUserByFirebaseUid = async (req, res) => {
+  const { uid } = req.params;
+  try {
+    const result = await pool.query(
+      "SELECT * FROM users WHERE firebase_uid = $1",
+      [uid]
+    );
+    if (result.rows.length === 0)
+      return res.status(404).json({ error: "User not found" });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Database error" });
+  }
+};
+
 // Get a user by ID
 exports.getUserById = async (req, res) => {
   const { id } = req.params;
@@ -53,8 +70,8 @@ exports.getUserByPhone = async (req, res) => {
   }
 };
 
-// Create a new user
-// If a user with this phone_number already exists, return them instead of creating a duplicate.
+// Create a new user (requires Firebase auth).
+// If a user with this phone_number or firebase_uid already exists, return them instead of creating a duplicate.
 exports.createUser = async (req, res) => {
     const {
     email,
@@ -63,7 +80,6 @@ exports.createUser = async (req, res) => {
     phone_number,
     password,
     role,
-    firebase_uid,
     avatar_url,
     bio,
     dob,
@@ -76,12 +92,26 @@ exports.createUser = async (req, res) => {
     preferences,
     settings,
   } = req.body;
+  // firebase_uid comes from the verified token — not from the request body
+  const firebase_uid = req.user.firebaseUid;
+
   try {
     // If phone already exists, return the existing user (prevents duplicate registrations)
     if (phone_number) {
       const existing = await pool.query(
         "SELECT * FROM users WHERE phone_number = $1",
         [normalizePhone(phone_number)]
+      );
+      if (existing.rows.length > 0) {
+        return res.status(200).json(existing.rows[0]);
+      }
+    }
+
+    // If firebase_uid already exists, return the existing user (social sign-in retry)
+    if (firebase_uid) {
+      const existing = await pool.query(
+        "SELECT * FROM users WHERE firebase_uid = $1",
+        [firebase_uid]
       );
       if (existing.rows.length > 0) {
         return res.status(200).json(existing.rows[0]);
@@ -103,7 +133,7 @@ exports.createUser = async (req, res) => {
         email,
         first_name,
         last_name,
-        phone_number,
+        phone_number || null,
         passwordHash,
         role || 'customer',
         firebase_uid || null,

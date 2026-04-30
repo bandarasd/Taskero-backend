@@ -3,6 +3,7 @@ const {
   getUsers,
   getUserById,
   getUserByPhone,
+  getUserByFirebaseUid,
   createUser,
   updateUser,
   deleteUser,
@@ -15,11 +16,12 @@ const router = express.Router();
 
 // Public routes (no auth required)
 router.get("/phone/:phoneNumber", getUserByPhone);
+router.get("/firebase/:uid", getUserByFirebaseUid);
 router.get("/:id", getUserById);
-router.post("/", createUser);
 
 // Protected routes (require Firebase auth)
 router.get("/", verifyFirebaseToken, getUsers);
+router.post("/", verifyFirebaseToken, createUser);
 router.put("/:id", verifyFirebaseToken, updateUser);
 router.delete("/:id", verifyFirebaseToken, deleteUser);
 router.post("/:id/upload-avatar", verifyFirebaseToken, uploadSingle, uploadProfilePicture);

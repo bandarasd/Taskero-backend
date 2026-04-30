@@ -2,6 +2,69 @@ const pool = require("../db");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 /**
+ * Create a Stripe PaymentIntent and return the client_secret to the iOS app.
+ * The iOS app uses this secret with Stripe PaymentSheet to collect card details.
+ */
+exports.createPaymentIntent = async (req, res) => {
+  const { task_id, amount, currency = "usd" } = req.body;
+
+  if (!amount || amount <= 0) {
+    return res.status(400).json({ error: "Invalid amount" });
+  }
+
+  try {
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(amount * 100), // convert to cents
+      currency,
+      automatic_payment_methods: { enabled: true },
+      metadata: { task_id: task_id || "" },
+    });
+
+    res.json({
+      client_secret: paymentIntent.client_secret,
+      payment_intent_id: paymentIntent.id,
+    });
+  } catch (err) {
+    console.error("Error creating PaymentIntent:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * Record a successfully confirmed Stripe payment in the DB.
+ * Called by the iOS app after Stripe PaymentSheet completes successfully.
+ */
+exports.recordStripePayment = async (req, res) => {
+  const { task_id, payment_intent_id, amount, currency = "usd" } = req.body;
+
+  try {
+    // Verify the PaymentIntent status with Stripe
+    const paymentIntent = await stripe.paymentIntents.retrieve(payment_intent_id);
+
+    if (paymentIntent.status !== "succeeded") {
+      return res.status(400).json({ error: `Payment not succeeded: ${paymentIntent.status}` });
+    }
+
+    const receiptUrl =
+      paymentIntent.latest_charge
+        ? (await stripe.charges.retrieve(paymentIntent.latest_charge)).receipt_url
+        : null;
+
+    const result = await pool.query(
+      `INSERT INTO payments
+        (task_id, payment_method, amount, currency, status, stripe_payment_intent_id, stripe_receipt_url, paid_at)
+       VALUES ($1,$2,$3,$4,'paid',$5,$6,NOW()) RETURNING *`,
+      [task_id, "card", amount, currency, payment_intent_id, receiptUrl]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error("Error recording payment:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
  * Create a payment (Stripe test card or offline)
  */
 exports.createPayment = async (req, res) => {
