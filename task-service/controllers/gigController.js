@@ -72,9 +72,19 @@ exports.createGig = async (req, res) => {
   const attachmentURLs = parseAttachments(req.files, attachments);
 
   try {
+    // Use tasker's profile location instead of per-gig location
+    const taskerRow = await pool.query(
+      "SELECT location_lat, location_lng, service_radius_km FROM users WHERE id = $1",
+      [tasker_id]
+    );
+    const tasker = taskerRow.rows[0];
+    const areaLat = tasker?.location_lat ?? null;
+    const areaLng = tasker?.location_lng ?? null;
+    const areaRadius = tasker?.service_radius_km ?? null;
+
     const result = await pool.query(
-      `INSERT INTO gigs (tasker_id, title, description, category, subcategory, base_price, delivery_time, tags, attachments)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      `INSERT INTO gigs (tasker_id, title, description, category, subcategory, base_price, delivery_time, tags, attachments, service_area_lat, service_area_lng, service_area_radius_km)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [
         tasker_id,
         title,
@@ -85,6 +95,9 @@ exports.createGig = async (req, res) => {
         delivery_time || null,
         parsedTags,
         JSON.stringify(attachmentURLs),
+        areaLat,
+        areaLng,
+        areaRadius,
       ]
     );
 
@@ -107,14 +120,36 @@ exports.createGig = async (req, res) => {
 };
 
 // Get all active gigs (for browse/home screen)
+// Optional query params: lat, lng — when provided, filters to gigs whose service area covers the point.
+// Gigs with no service area set are excluded when a location is provided.
 exports.getAllGigs = async (req, res) => {
+  const lat = req.query.lat != null ? parseFloat(req.query.lat) : null;
+  const lng = req.query.lng != null ? parseFloat(req.query.lng) : null;
+  const useLocation = lat !== null && !isNaN(lat) && lng !== null && !isNaN(lng);
+
   try {
+    const params = [];
+    let locationClause = "";
+    if (useLocation) {
+      params.push(lat, lng);
+      locationClause = `
+        AND g.service_area_lat IS NOT NULL
+        AND (
+            6371 * acos(
+              LEAST(1.0, cos(radians($1)) * cos(radians(g.service_area_lat))
+              * cos(radians(g.service_area_lng) - radians($2))
+              + sin(radians($1)) * sin(radians(g.service_area_lat)))
+            ) <= g.service_area_radius_km
+        )`;
+    }
+
     const result = await pool.query(
       `SELECT g.*, u.first_name, u.last_name, u.avatar_url
        FROM gigs g
        JOIN users u ON g.tasker_id = u.id
-       WHERE g.is_active = true
-       ORDER BY g.created_at DESC`
+       WHERE g.is_active = true${locationClause}
+       ORDER BY g.created_at DESC`,
+      params
     );
     res.status(200).json(result.rows);
   } catch (error) {
@@ -160,16 +195,36 @@ exports.getGigsByTasker = async (req, res) => {
 };
 
 // Get active gigs by category
+// Optional query params: lat, lng — same location filter as getAllGigs.
 exports.getGigsByCategory = async (req, res) => {
   const { category } = req.params;
+  const lat = req.query.lat != null ? parseFloat(req.query.lat) : null;
+  const lng = req.query.lng != null ? parseFloat(req.query.lng) : null;
+  const useLocation = lat !== null && !isNaN(lat) && lng !== null && !isNaN(lng);
+
   try {
+    const params = [category];
+    let locationClause = "";
+    if (useLocation) {
+      params.push(lat, lng);
+      locationClause = `
+        AND g.service_area_lat IS NOT NULL
+        AND (
+            6371 * acos(
+              LEAST(1.0, cos(radians($2)) * cos(radians(g.service_area_lat))
+              * cos(radians(g.service_area_lng) - radians($3))
+              + sin(radians($2)) * sin(radians(g.service_area_lat)))
+            ) <= g.service_area_radius_km
+        )`;
+    }
+
     const result = await pool.query(
       `SELECT g.*, u.first_name, u.last_name, u.avatar_url
        FROM gigs g
        JOIN users u ON g.tasker_id = u.id
-       WHERE g.is_active = true AND LOWER(g.category) = LOWER($1)
+       WHERE g.is_active = true AND LOWER(g.category) = LOWER($1)${locationClause}
        ORDER BY g.created_at DESC`,
-      [category]
+      params
     );
     res.status(200).json(result.rows);
   } catch (error) {
@@ -193,6 +248,26 @@ exports.updateGig = async (req, res) => {
   } = req.body;
 
   try {
+    const currentRow = await pool.query(
+      `SELECT tasker_id, title, description, category, subcategory, base_price, delivery_time, tags, attachments
+       FROM gigs WHERE id = $1`,
+      [id]
+    );
+    if (currentRow.rows.length === 0) {
+      return res.status(404).json({ error: "Gig not found" });
+    }
+    const current = currentRow.rows[0];
+
+    // Re-sync service area from tasker's profile location
+    const taskerRow = await pool.query(
+      "SELECT location_lat, location_lng, service_radius_km FROM users WHERE id = $1",
+      [current.tasker_id]
+    );
+    const tasker = taskerRow.rows[0];
+    const finalAreaLat = tasker?.location_lat ?? null;
+    const finalAreaLng = tasker?.location_lng ?? null;
+    const finalAreaRadius = tasker?.service_radius_km ?? null;
+
     // Merge existing attachment URLs with any newly uploaded ones
     let finalAttachments = [];
 
@@ -219,28 +294,36 @@ exports.updateGig = async (req, res) => {
 
     // If no attachment info was provided at all, preserve existing DB value
     if (!existingAttachments && (!req.files || req.files.length === 0)) {
-      const current = await pool.query(
-        `SELECT attachments FROM gigs WHERE id = $1`,
-        [id]
-      );
-      finalAttachments = current.rows[0]?.attachments || [];
+      finalAttachments = current.attachments || [];
     }
+
+    const finalTitle = title ?? current.title;
+    const finalDescription = description ?? current.description;
+    const finalCategory = category ?? current.category;
+    const finalSubcategory = subcategory ?? current.subcategory;
+    const finalBasePrice = base_price !== undefined ? base_price : current.base_price;
+    const finalDeliveryTime = delivery_time !== undefined ? delivery_time : current.delivery_time;
+    const finalTags = tags !== undefined ? tags : current.tags;
 
     const result = await pool.query(
       `UPDATE gigs
        SET title = $1, description = $2, category = $3, subcategory = $4,
            base_price = $5, delivery_time = $6, tags = $7, attachments = $8,
+           service_area_lat = $9, service_area_lng = $10, service_area_radius_km = $11,
            updated_at = NOW()
-       WHERE id = $9 RETURNING *`,
+       WHERE id = $12 RETURNING *`,
       [
-        title,
-        description,
-        category,
-        subcategory,
-        base_price || null,
-        delivery_time || null,
-        tags || null,
+        finalTitle,
+        finalDescription,
+        finalCategory,
+        finalSubcategory,
+        finalBasePrice !== null ? finalBasePrice : null,
+        finalDeliveryTime !== null ? finalDeliveryTime : null,
+        finalTags !== null ? finalTags : null,
         JSON.stringify(finalAttachments),
+        finalAreaLat,
+        finalAreaLng,
+        finalAreaRadius,
         id,
       ]
     );

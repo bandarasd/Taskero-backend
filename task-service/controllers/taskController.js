@@ -89,6 +89,66 @@ exports.getTasksForCustomer = async (req, res) => {
   }
 };
 
+// Tasker submits a price quote for a pending task
+exports.submitQuote = async (req, res) => {
+  const { id } = req.params;
+  const { price } = req.body;
+  if (!price || isNaN(price) || Number(price) <= 0) {
+    return res.status(400).json({ error: "A valid price is required" });
+  }
+  try {
+    const task = await pool.query(`SELECT * FROM tasks WHERE id = $1`, [id]);
+    if (task.rows.length === 0) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+    if (task.rows[0].status !== "pending") {
+      return res.status(400).json({ error: "Task is not in pending status" });
+    }
+    const result = await pool.query(
+      `UPDATE tasks SET status = 'quoted', quoted_price = $1, quoted_at = NOW() WHERE id = $2 RETURNING *`,
+      [Number(price), id]
+    );
+    return res.status(200).json(result.rows[0]);
+  } catch (error) {
+    console.error("Error submitting quote:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+// Customer accepts or rejects a tasker's quote
+exports.respondToQuote = async (req, res) => {
+  const { id } = req.params;
+  const { action } = req.body; // "accept" or "reject"
+  if (!["accept", "reject"].includes(action)) {
+    return res.status(400).json({ error: "Action must be 'accept' or 'reject'" });
+  }
+  try {
+    const task = await pool.query(`SELECT * FROM tasks WHERE id = $1`, [id]);
+    if (task.rows.length === 0) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+    if (task.rows[0].status !== "quoted") {
+      return res.status(400).json({ error: "Task is not in quoted status" });
+    }
+    let result;
+    if (action === "accept") {
+      result = await pool.query(
+        `UPDATE tasks SET status = 'accepted', final_price = quoted_price, accepted_at = NOW() WHERE id = $1 RETURNING *`,
+        [id]
+      );
+    } else {
+      result = await pool.query(
+        `UPDATE tasks SET status = 'cancelled' WHERE id = $1 RETURNING *`,
+        [id]
+      );
+    }
+    return res.status(200).json(result.rows[0]);
+  } catch (error) {
+    console.error("Error responding to quote:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 // Update task status
 exports.updateTaskStatus = async (req, res) => {
   const { id } = req.params;

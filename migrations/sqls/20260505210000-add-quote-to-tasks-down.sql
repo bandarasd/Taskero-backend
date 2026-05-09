@@ -1,0 +1,3 @@
+ALTER TABLE tasks
+  DROP COLUMN IF EXISTS quoted_price,
+  DROP COLUMN IF EXISTS quoted_at;

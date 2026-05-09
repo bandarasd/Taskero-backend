@@ -1,0 +1,3 @@
+ALTER TABLE tasks
+  ADD COLUMN quoted_price DECIMAL(10,2),
+  ADD COLUMN quoted_at TIMESTAMP;
