@@ -151,7 +151,11 @@ exports.getAllGigs = async (req, res) => {
        ORDER BY g.created_at DESC`,
       params
     );
-    res.status(200).json(result.rows);
+    const gigs = result.rows.map(({ first_name, last_name, avatar_url, ...gig }) => ({
+      ...gig,
+      tasker: { id: gig.tasker_id, first_name, last_name, avatar_url },
+    }));
+    res.status(200).json(gigs);
   } catch (error) {
     console.error("[ERROR] Fetching all gigs failed:", error);
     res.status(500).json({ error: "Database error" });
@@ -163,16 +167,34 @@ exports.getGigById = async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
-      `SELECT g.*, u.first_name, u.last_name, u.avatar_url
+      `SELECT g.*,
+              u.first_name, u.last_name, u.avatar_url, u.bio,
+              COALESCE(AVG(r.rating), 0)::numeric(3,2) AS tasker_rating,
+              COUNT(r.id)::int AS tasker_review_count
        FROM gigs g
        JOIN users u ON g.tasker_id = u.id
-       WHERE g.id = $1`,
+       LEFT JOIN reviews r ON r.tasker_id = g.tasker_id
+       WHERE g.id = $1
+       GROUP BY g.id, u.id`,
       [id]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Gig not found" });
     }
-    res.status(200).json(result.rows[0]);
+    const row = result.rows[0];
+    const { first_name, last_name, avatar_url, bio, tasker_rating, tasker_review_count, ...gig } = row;
+    res.status(200).json({
+      ...gig,
+      tasker: {
+        id: gig.tasker_id,
+        first_name,
+        last_name,
+        avatar_url,
+        bio,
+        rating: parseFloat(tasker_rating),
+        review_count: tasker_review_count,
+      },
+    });
   } catch (error) {
     console.error("[ERROR] Fetching gig failed:", error);
     res.status(500).json({ error: "Database error" });
@@ -226,7 +248,11 @@ exports.getGigsByCategory = async (req, res) => {
        ORDER BY g.created_at DESC`,
       params
     );
-    res.status(200).json(result.rows);
+    const gigs = result.rows.map(({ first_name, last_name, avatar_url, ...gig }) => ({
+      ...gig,
+      tasker: { id: gig.tasker_id, first_name, last_name, avatar_url },
+    }));
+    res.status(200).json(gigs);
   } catch (error) {
     console.error("[ERROR] Fetching gigs by category failed:", error);
     res.status(500).json({ error: "Database error" });

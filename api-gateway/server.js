@@ -8,6 +8,10 @@ const app = express();
 
 // Middleware
 app.use(cors());
+app.use((req, _res, next) => {
+  console.log(`[gateway] ${req.method} ${req.url} from ${req.ip}`);
+  next();
+});
 app.use(morgan("dev")); // Request logging
 // NOTE: Do NOT add express.json() here — it consumes the request body stream,
 // which prevents http-proxy-middleware from forwarding the body to downstream services.
@@ -67,10 +71,11 @@ app.use("/auth", createProxy(services.users));
 app.use("/users", createProxy(services.users));
 app.use("/verifications", createProxy(services.users));
 
-// Task Service: /tasks/*, /gigs/*, /reviews/*
+// Task Service: /tasks/*, /gigs/*, /reviews/*, /taskers/*
 app.use("/tasks", createProxy(services.tasks));
 app.use("/gigs", createProxy(services.tasks));
 app.use("/reviews", createProxy(services.tasks));
+app.use("/taskers", createProxy(services.tasks));
 
 // Chat Service: /chat/*
 app.use("/chat", createProxy(services.chat));

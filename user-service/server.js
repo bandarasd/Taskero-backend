@@ -9,6 +9,10 @@ const authRoutes = require("./routes/authRoutes");
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use((req, _res, next) => {
+  console.log(`[user-service] ${req.method} ${req.url}`);
+  next();
+});
 
 // Health check
 app.get("/health", (req, res) => res.json({ status: "User service running" }));
@@ -22,5 +26,11 @@ app.use("/users", userRoutes);
 // Verification routes (can be accessed as /verifications/... or /users/.../verifications/...)
 app.use("/verifications", verificationRoutes);
 
+const admin = require('../shared/firebaseAdmin');
+
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log("user-service listening on port", PORT));
+app.listen(PORT, () => {
+  console.log("user-service listening on port", PORT);
+  // Pre-fetch Firebase public keys so the first real verifyIdToken call is fast
+  admin.auth().getUser('warmup-probe').catch(() => {});
+});
