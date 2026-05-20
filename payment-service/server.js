@@ -3,7 +3,7 @@ const express = require("express");
 const cors = require("cors");
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: process.env.FRONTEND_URL || "*" }));
 app.use(express.json());
 
 // Health check
@@ -12,6 +12,9 @@ app.get("/health", (req, res) =>
 );
 
 app.use("/payments", require("./routes/paymentRoutes"));
+
+const errorHandler = require('../shared/middleware/errorHandler');
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("payment-service listening on port", PORT));

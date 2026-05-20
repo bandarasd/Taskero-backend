@@ -39,5 +39,8 @@ app.post("/send", async (req, res) => {
   }
 });
 
+const errorHandler = require('../shared/middleware/errorHandler');
+app.use(errorHandler);
+
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => console.log(`Email service running on port ${PORT}`));

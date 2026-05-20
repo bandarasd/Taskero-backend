@@ -57,28 +57,6 @@ exports.submitVerification = async (req, res) => {
       [userId, documentType, documentUrl]
     );
 
-    // If face photo was uploaded, you might want to store it separately or update the record
-    if (facePhotoUrl || addressProofUrl) {
-      const updateFields = [];
-      const updateValues = [];
-      let paramIndex = 1;
-
-      if (facePhotoUrl) {
-        updateFields.push(`face_photo_url = $${paramIndex++}`);
-        updateValues.push(facePhotoUrl);
-      }
-      if (addressProofUrl) {
-        updateFields.push(`address_proof_url = $${paramIndex++}`);
-        updateValues.push(addressProofUrl);
-      }
-      updateValues.push(result.rows[0].id);
-
-      if (updateFields.length > 0) {
-        // Note: You might need to add these columns to your verifications table
-        // For now, we'll just include them in the response
-      }
-    }
-
     res.status(201).json({
       message: "Verification documents submitted successfully",
       verification: result.rows[0],

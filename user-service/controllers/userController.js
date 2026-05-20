@@ -1,14 +1,7 @@
 const bcrypt = require("bcryptjs");
 const pool = require("../db");
 
-// Normalize phone: decodeURIComponent turns '+' into a space, so we fix it back
-const normalizePhone = (raw) => {
-  let p = decodeURIComponent(String(raw)).trim();
-  // After decoding, a leading space means the original was a '+'
-  if (p.startsWith(" ")) p = "+" + p.slice(1);
-  if (!p.startsWith("+")) p = "+" + p;
-  return p;
-};
+const normalizePhone = require("../utils/phone");
 
 // Get all users
 exports.getUsers = async (req, res) => {
@@ -55,7 +48,6 @@ exports.getUserById = async (req, res) => {
 // Lookup user by phone number
 exports.getUserByPhone = async (req, res) => {
   const phoneNumber = normalizePhone(req.params.phoneNumber);
-  console.log(`[getUserByPhone] raw: "${req.params.phoneNumber}" → normalised: "${phoneNumber}"`);
   try {
     const result = await pool.query(
       "SELECT * FROM users WHERE phone_number = $1",
@@ -161,10 +153,25 @@ exports.createUser = async (req, res) => {
   }
 };
 
+const UPDATABLE_USER_FIELDS = new Set([
+  "email", "first_name", "last_name", "phone_number", "avatar_url", "bio",
+  "dob", "gender", "address_line1", "address_line2", "city", "postal_code",
+  "location", "preferences", "settings",
+]);
+
 // Update a user
 exports.updateUser = async (req, res) => {
   const { id } = req.params;
-  const fields = req.body;
+  const raw = req.body;
+
+  const fields = Object.fromEntries(
+    Object.entries(raw).filter(([k]) => UPDATABLE_USER_FIELDS.has(k))
+  );
+
+  if (Object.keys(fields).length === 0) {
+    return res.status(400).json({ error: "No valid fields to update" });
+  }
+
   const setQuery = Object.keys(fields)
     .map((key, idx) => `${key} = $${idx + 1}`)
     .join(", ");

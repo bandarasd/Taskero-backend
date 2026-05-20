@@ -7,7 +7,7 @@ const { createProxyMiddleware } = require("http-proxy-middleware");
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({ origin: process.env.FRONTEND_URL || "*" }));
 app.use((req, _res, next) => {
   console.log(`[gateway] ${req.method} ${req.url} from ${req.ip}`);
   next();
@@ -108,7 +108,7 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 API Gateway running on port ${PORT}`);
   console.log("\nProxying to services:");
   Object.entries(services).forEach(([name, url]) => {

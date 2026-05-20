@@ -46,5 +46,4 @@ const upload = multer({
 
 module.exports = {
   uploadSingle: upload.single("profilePicture"),
-  upload,
 };

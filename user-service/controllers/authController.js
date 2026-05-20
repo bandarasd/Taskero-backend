@@ -1,14 +1,7 @@
 const bcrypt = require("bcryptjs");
 const pool = require("../db");
 
-// Normalize phone: decodeURIComponent turns '+' into a space, so we fix it back
-const normalizePhone = (raw) => {
-  let p = decodeURIComponent(String(raw)).trim();
-  // After decoding, a leading space means the original was a '+'
-  if (p.startsWith(" ")) p = "+" + p.slice(1);
-  if (!p.startsWith("+")) p = "+" + p;
-  return p;
-};
+const normalizePhone = require("../utils/phone");
 
 // Login user
 exports.login = async (req, res) => {

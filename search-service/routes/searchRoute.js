@@ -4,15 +4,14 @@ const {
   deleteGig,
   searchGigs,
 } = require("../controllers/searchController");
+const requireInternalKey = require("../../shared/middleware/internalAuth");
 const router = express.Router();
 
-// Index a gig
-router.post("/gigs", indexGig);
+// Internal routes — require x-internal-key header
+router.post("/gigs", requireInternalKey, indexGig);
+router.delete("/gigs/:id", requireInternalKey, deleteGig);
 
-// Delete a gig
-router.delete("/gigs/:id", deleteGig);
-
-// Search gigs
+// Public search
 router.get("/gigs/search", searchGigs);
 
 module.exports = router;

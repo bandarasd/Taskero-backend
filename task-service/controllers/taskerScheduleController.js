@@ -21,7 +21,6 @@ exports.upsertSchedule = async (req, res) => {
   const { tasker_id } = req.params;
   const days = req.body;
 
-  console.log("[schedule] upsert body:", JSON.stringify(days));
   if (!Array.isArray(days) || days.length === 0) {
     return res.status(400).json({ error: "Body must be a non-empty array of schedule days" });
   }
@@ -33,7 +32,6 @@ exports.upsertSchedule = async (req, res) => {
     for (const day of days) {
       const { day_of_week, start_time, end_time, buffer_minutes = 30, is_active = true } = day;
       if (day_of_week === undefined || !start_time || !end_time) {
-        console.error("[schedule] validation failed for entry:", JSON.stringify(day));
         await client.query("ROLLBACK");
         return res.status(400).json({ error: "Each entry requires day_of_week, start_time, end_time" });
       }
@@ -102,21 +100,23 @@ exports.getAvailableSlots = async (req, res) => {
     const startMin = parseTime(schedule.start_time);
     const endMin = parseTime(schedule.end_time);
 
-    // Get accepted/in_progress tasks for this tasker on this date
+    // Get quoted/accepted/in_progress tasks — expired quotes are treated as freed
     const tasksResult = await pool.query(
-      `SELECT due_date, estimated_duration_minutes
+      `SELECT scheduled_at, estimated_duration_minutes
        FROM tasks
        WHERE tasker_id = $1
-         AND status IN ('accepted', 'in_progress')
-         AND due_date::date = $2::date`,
+         AND status IN ('quoted', 'accepted', 'in_progress')
+         AND scheduled_at IS NOT NULL
+         AND scheduled_at::date = $2::date
+         AND (quote_expires_at IS NULL OR quote_expires_at > NOW())`,
       [tasker_id, date]
     );
 
     // Build booked intervals [startMin, endMin) in minutes-since-midnight
     const bookedIntervals = tasksResult.rows.map((t) => {
-      const d = new Date(t.due_date);
+      const d = new Date(t.scheduled_at);
       const taskStartMin = d.getUTCHours() * 60 + d.getUTCMinutes();
-      const duration = t.estimated_duration_minutes || 60; // default 60 min if not set
+      const duration = t.estimated_duration_minutes || 60;
       return { start: taskStartMin, end: taskStartMin + duration + bufferMinutes };
     });
 
