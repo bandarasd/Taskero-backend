@@ -4,6 +4,7 @@ const cors = require("cors");
 const pool = require("./db");
 const userRoutes = require("./routes/userRoutes");
 const verificationRoutes = require("./routes/verificationRoutes");
+const certificationRoutes = require("./routes/certificationRoutes");
 const authRoutes = require("./routes/authRoutes");
 const attachUser = require("../shared/middleware/attachUser");
 
@@ -27,6 +28,10 @@ app.use("/users", userRoutes);
 
 // Verification routes (can be accessed as /verifications/... or /users/.../verifications/...)
 app.use("/verifications", verificationRoutes);
+
+// Certification routes (category-level certification for workers)
+app.use("/certifications", certificationRoutes);
+app.use("/users", certificationRoutes);
 
 const admin = require('../shared/firebaseAdmin');
 

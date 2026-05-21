@@ -4,9 +4,6 @@ var dbm;
 var type;
 var seed;
 
-/**
-  * We receive the dbmigrate dependency from main.js
-  */
 exports.setup = function(options, seedLink) {
   dbm = options.dbmigrate;
   type = dbm.dataType;
@@ -14,17 +11,29 @@ exports.setup = function(options, seedLink) {
 };
 
 exports.up = function(db) {
-  return db.addColumn('users', 'role', {
-    type: 'string',
-    length: 20,
-    defaultValue: 'customer'
+  var filePath = __dirname + '/sqls/20260306130000-add-role-to-users-up.sql';
+  return new Promise(function(resolve, reject) {
+    require('fs').readFile(filePath, { encoding: 'utf-8' }, function(err, data) {
+      if (err) return reject(err);
+      db.runSql(data, function(err) {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
   });
 };
 
 exports.down = function(db) {
-  return db.removeColumn('users', 'role');
+  var filePath = __dirname + '/sqls/20260306130000-add-role-to-users-down.sql';
+  return new Promise(function(resolve, reject) {
+    require('fs').readFile(filePath, { encoding: 'utf-8' }, function(err, data) {
+      if (err) return reject(err);
+      db.runSql(data, function(err) {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  });
 };
 
-exports._meta = {
-  "version": 1
-};
+exports._meta = { "version": 1 };

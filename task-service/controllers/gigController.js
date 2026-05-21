@@ -1,5 +1,24 @@
 const pool = require("../db");
 const axios = require("axios");
+const CERTIFIED_CATEGORIES = require("../config/certifiedCategories");
+
+const USER_SERVICE_URL = process.env.USER_SERVICE_URL || "http://localhost:3001";
+
+// Check whether a tasker has an approved certification for a given category
+const hasCertification = async (taskerId, category) => {
+  try {
+    const resp = await axios.get(
+      `${USER_SERVICE_URL}/users/${taskerId}/certifications`,
+      { timeout: 5000 }
+    );
+    const certs = resp.data?.certifications || [];
+    return certs.some(
+      (c) => c.category === category && c.status === "approved"
+    );
+  } catch {
+    return false;
+  }
+};
 
 const GIG_SEARCH_SERVICE_URL = process.env.GIG_SEARCH_SERVICE_URL;
 
@@ -71,16 +90,33 @@ exports.createGig = async (req, res) => {
 
   const attachmentURLs = parseAttachments(req.files, attachments);
 
+  // Certification gate — block restricted categories unless the worker is approved
+  if (category && CERTIFIED_CATEGORIES.includes(category)) {
+    const certified = await hasCertification(tasker_id, category);
+    if (!certified) {
+      return res.status(403).json({
+        error: `Category "${category}" requires an approved certification. Please apply for certification in your profile.`,
+      });
+    }
+  }
+
   try {
-    // Use tasker's profile location instead of per-gig location
-    const taskerRow = await pool.query(
-      "SELECT location_lat, location_lng, service_radius_km FROM users WHERE id = $1",
-      [tasker_id]
-    );
-    const tasker = taskerRow.rows[0];
-    const areaLat = tasker?.location_lat ?? null;
-    const areaLng = tasker?.location_lng ?? null;
-    const areaRadius = tasker?.service_radius_km ?? null;
+    // Use per-gig service area if provided; fall back to tasker's profile location
+    const { service_area_lat, service_area_lng, service_area_radius_km } = req.body;
+    let areaLat = service_area_lat ? parseFloat(service_area_lat) : null;
+    let areaLng = service_area_lng ? parseFloat(service_area_lng) : null;
+    let areaRadius = service_area_radius_km ? parseFloat(service_area_radius_km) : null;
+
+    if (areaLat === null || areaLng === null) {
+      const taskerRow = await pool.query(
+        "SELECT location_lat, location_lng, service_radius_km FROM users WHERE id = $1",
+        [tasker_id]
+      );
+      const tasker = taskerRow.rows[0];
+      areaLat = tasker?.location_lat ?? null;
+      areaLng = tasker?.location_lng ?? null;
+      areaRadius = areaRadius ?? tasker?.service_radius_km ?? null;
+    }
 
     const result = await pool.query(
       `INSERT INTO gigs (tasker_id, title, description, category, subcategory, base_price, delivery_time, tags, attachments, service_area_lat, service_area_lng, service_area_radius_km)
@@ -271,6 +307,9 @@ exports.updateGig = async (req, res) => {
     delivery_time,
     tags,
     existingAttachments,
+    service_area_lat,
+    service_area_lng,
+    service_area_radius_km,
   } = req.body;
 
   try {
@@ -284,15 +323,32 @@ exports.updateGig = async (req, res) => {
     }
     const current = currentRow.rows[0];
 
-    // Re-sync service area from tasker's profile location
-    const taskerRow = await pool.query(
-      "SELECT location_lat, location_lng, service_radius_km FROM users WHERE id = $1",
-      [current.tasker_id]
-    );
-    const tasker = taskerRow.rows[0];
-    const finalAreaLat = tasker?.location_lat ?? null;
-    const finalAreaLng = tasker?.location_lng ?? null;
-    const finalAreaRadius = tasker?.service_radius_km ?? null;
+    // Certification gate for category changes
+    const effectiveCategory = category ?? current.category;
+    if (effectiveCategory && CERTIFIED_CATEGORIES.includes(effectiveCategory)) {
+      const certified = await hasCertification(current.tasker_id, effectiveCategory);
+      if (!certified) {
+        return res.status(403).json({
+          error: `Category "${effectiveCategory}" requires an approved certification.`,
+        });
+      }
+    }
+
+    // Use per-gig service area if provided; fall back to tasker's profile location
+    let finalAreaLat = service_area_lat ? parseFloat(service_area_lat) : null;
+    let finalAreaLng = service_area_lng ? parseFloat(service_area_lng) : null;
+    let finalAreaRadius = service_area_radius_km ? parseFloat(service_area_radius_km) : null;
+
+    if (finalAreaLat === null || finalAreaLng === null) {
+      const taskerRow = await pool.query(
+        "SELECT location_lat, location_lng, service_radius_km FROM users WHERE id = $1",
+        [current.tasker_id]
+      );
+      const tasker = taskerRow.rows[0];
+      finalAreaLat = tasker?.location_lat ?? null;
+      finalAreaLng = tasker?.location_lng ?? null;
+      finalAreaRadius = finalAreaRadius ?? tasker?.service_radius_km ?? null;
+    }
 
     // Merge existing attachment URLs with any newly uploaded ones
     let finalAttachments = [];
