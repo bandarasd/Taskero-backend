@@ -66,16 +66,18 @@ app.get("/health/all", async (req, res) => {
 // ============== Route Proxies ==============
 // Routes are mapped to match the actual service endpoints
 
-// User Service: /auth/*, /users/*, /verifications/*
+// User Service: /auth/*, /users/*, /verifications/*, /content/*
 app.use("/auth", createProxy(services.users));
 app.use("/users", createProxy(services.users));
 app.use("/verifications", createProxy(services.users));
+app.use("/content", createProxy(services.users));
 
-// Task Service: /tasks/*, /gigs/*, /reviews/*, /taskers/*
+// Task Service: /tasks/*, /gigs/*, /reviews/*, /taskers/*, /categories/*
 app.use("/tasks", createProxy(services.tasks));
 app.use("/gigs", createProxy(services.tasks));
 app.use("/reviews", createProxy(services.tasks));
 app.use("/taskers", createProxy(services.tasks));
+app.use("/categories", createProxy(services.tasks));
 
 // Chat Service: /chat/*
 app.use("/chat", createProxy(services.chat));

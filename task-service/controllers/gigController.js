@@ -1,6 +1,13 @@
 const pool = require("../db");
 const axios = require("axios");
-const CERTIFIED_CATEGORIES = require("../config/certifiedCategories");
+
+async function requiresCertification(category) {
+  const result = await pool.query(
+    `SELECT requires_certification FROM service_categories WHERE name = $1 AND is_active = TRUE`,
+    [category]
+  );
+  return result.rows[0]?.requires_certification === true;
+}
 
 const USER_SERVICE_URL = process.env.USER_SERVICE_URL || "http://localhost:3001";
 
@@ -91,7 +98,7 @@ exports.createGig = async (req, res) => {
   const attachmentURLs = parseAttachments(req.files, attachments);
 
   // Certification gate — block restricted categories unless the worker is approved
-  if (category && CERTIFIED_CATEGORIES.includes(category)) {
+  if (category && await requiresCertification(category)) {
     const certified = await hasCertification(tasker_id, category);
     if (!certified) {
       return res.status(403).json({
@@ -376,7 +383,7 @@ exports.updateGig = async (req, res) => {
 
     // Certification gate for category changes
     const effectiveCategory = category ?? current.category;
-    if (effectiveCategory && CERTIFIED_CATEGORIES.includes(effectiveCategory)) {
+    if (effectiveCategory && await requiresCertification(effectiveCategory)) {
       const certified = await hasCertification(current.tasker_id, effectiveCategory);
       if (!certified) {
         return res.status(403).json({

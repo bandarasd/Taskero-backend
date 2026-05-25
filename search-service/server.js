@@ -11,7 +11,7 @@ app.get("/health", (req, res) =>
   res.json({ status: "search-service running" })
 );
 
-app.use("/", require("./routes/searchRoute"));
+app.use("/search", require("./routes/searchRoute"));
 
 const errorHandler = require('../shared/middleware/errorHandler');
 app.use(errorHandler);

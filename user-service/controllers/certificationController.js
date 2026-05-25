@@ -1,6 +1,12 @@
 const pool = require("../db");
 
-const CERTIFIED_CATEGORIES = ["Electrician", "Plumbing"];
+async function isCertifiedCategory(category) {
+  const result = await pool.query(
+    `SELECT requires_certification FROM service_categories WHERE name = $1 AND is_active = TRUE`,
+    [category]
+  );
+  return result.rows[0]?.requires_certification === true;
+}
 
 // Worker: submit certification request for a category
 exports.submitCertification = async (req, res) => {
@@ -12,7 +18,7 @@ exports.submitCertification = async (req, res) => {
       return res.status(400).json({ error: "Category is required" });
     }
 
-    if (!CERTIFIED_CATEGORIES.includes(category)) {
+    if (!(await isCertifiedCategory(category))) {
       return res
         .status(400)
         .json({ error: "This category does not require certification" });

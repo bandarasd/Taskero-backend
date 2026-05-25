@@ -24,6 +24,9 @@ app.use(express.json());
 // Health check
 app.get("/health", (req, res) => res.json({ status: "task-service running" }));
 
+// Category routes (public)
+app.use("/categories", require("./routes/categoryRoutes"));
+
 // Gig routes
 app.use("/gigs", require("./routes/gigRoutes"));
 

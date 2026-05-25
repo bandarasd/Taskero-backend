@@ -33,6 +33,9 @@ app.use("/verifications", verificationRoutes);
 app.use("/certifications", certificationRoutes);
 app.use("/users", certificationRoutes);
 
+// Content routes (FAQs, promos, review tags)
+app.use("/content", require("./routes/contentRoutes"));
+
 const admin = require('../shared/firebaseAdmin');
 
 const errorHandler = require('../shared/middleware/errorHandler');
