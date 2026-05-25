@@ -23,23 +23,34 @@ exports.getOrCreateThread = async (req, res) => {
 
 exports.getThreadsByUser = async (req, res) => {
   const { user_id } = req.params;
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 20);
+  const offset = (page - 1) * limit;
   try {
-    const result = await pool.query(
-      `SELECT
-        ct.id, ct.customer_id, ct.tasker_id, ct.task_id, ct.gig_id, ct.created_at,
-        c.first_name AS customer_first_name, c.last_name AS customer_last_name, c.avatar_url AS customer_avatar,
-        t.first_name AS tasker_first_name, t.last_name AS tasker_last_name, t.avatar_url AS tasker_avatar,
-        (SELECT message_text FROM messages WHERE thread_id = ct.id ORDER BY created_at DESC LIMIT 1) AS last_message,
-        (SELECT created_at FROM messages WHERE thread_id = ct.id ORDER BY created_at DESC LIMIT 1) AS last_message_at,
-        (SELECT COUNT(*) FROM messages WHERE thread_id = ct.id AND sender_id != $1 AND is_read = false)::int AS unread_count
-       FROM chat_threads ct
-       JOIN users c ON ct.customer_id = c.id
-       JOIN users t ON ct.tasker_id = t.id
-       WHERE ct.customer_id = $1 OR ct.tasker_id = $1
-       ORDER BY last_message_at DESC NULLS LAST, ct.created_at DESC`,
-      [user_id]
-    );
+    const [countResult, result] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*) FROM chat_threads ct WHERE ct.customer_id = $1 OR ct.tasker_id = $1`,
+        [user_id]
+      ),
+      pool.query(
+        `SELECT
+          ct.id, ct.customer_id, ct.tasker_id, ct.task_id, ct.gig_id, ct.created_at,
+          c.first_name AS customer_first_name, c.last_name AS customer_last_name, c.avatar_url AS customer_avatar,
+          t.first_name AS tasker_first_name, t.last_name AS tasker_last_name, t.avatar_url AS tasker_avatar,
+          (SELECT message_text FROM messages WHERE thread_id = ct.id ORDER BY created_at DESC LIMIT 1) AS last_message,
+          (SELECT created_at FROM messages WHERE thread_id = ct.id ORDER BY created_at DESC LIMIT 1) AS last_message_at,
+          (SELECT COUNT(*) FROM messages WHERE thread_id = ct.id AND sender_id != $1 AND is_read = false)::int AS unread_count
+         FROM chat_threads ct
+         JOIN users c ON ct.customer_id = c.id
+         JOIN users t ON ct.tasker_id = t.id
+         WHERE ct.customer_id = $1 OR ct.tasker_id = $1
+         ORDER BY last_message_at DESC NULLS LAST, ct.created_at DESC
+         LIMIT $2 OFFSET $3`,
+        [user_id, limit, offset]
+      ),
+    ]);
 
+    const total = parseInt(countResult.rows[0].count);
     const threads = result.rows.map((r) => ({
       id: r.id,
       customer_id: r.customer_id,
@@ -64,7 +75,7 @@ exports.getThreadsByUser = async (req, res) => {
       },
     }));
 
-    res.status(200).json(threads);
+    res.status(200).json({ data: threads, pagination: { page, limit, total, hasMore: page * limit < total } });
   } catch (error) {
     console.error("Error fetching threads:", error);
     res.status(500).json({ error: "Internal server error" });
@@ -109,12 +120,30 @@ exports.sendMessage = async (req, res) => {
 
 exports.getMessagesByThread = async (req, res) => {
   const { thread_id } = req.params;
+  // cursor-based: ?before=<message_id> loads older messages; omit for latest page
+  const before = req.query.before || null;
+  const limit = Math.min(100, parseInt(req.query.limit) || 30);
   try {
+    const params = [thread_id, limit];
+    let cursorClause = "";
+    if (before) {
+      params.push(before);
+      cursorClause = `AND id < $${params.length}`;
+    }
+    // Fetch DESC then reverse so client always gets oldest-first order
     const result = await pool.query(
-      `SELECT * FROM messages WHERE thread_id = $1 ORDER BY created_at ASC`,
-      [thread_id]
+      `SELECT * FROM (
+         SELECT * FROM messages
+         WHERE thread_id = $1 ${cursorClause}
+         ORDER BY created_at DESC
+         LIMIT $2
+       ) sub
+       ORDER BY created_at ASC`,
+      params
     );
-    res.status(200).json(result.rows);
+    const hasMore = result.rows.length === limit;
+    const oldestId = result.rows.length > 0 ? result.rows[0].id : null;
+    res.status(200).json({ data: result.rows, pagination: { limit, hasMore, oldestId } });
   } catch (error) {
     console.error("Error getting messages:", error);
     res.status(500).json({ error: "Internal server error" });

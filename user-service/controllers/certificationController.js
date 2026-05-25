@@ -53,15 +53,20 @@ exports.submitCertification = async (req, res) => {
 
 // Worker: get own certifications
 exports.getWorkerCertifications = async (req, res) => {
+  const userId = req.params.userId;
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 50);
+  const offset = (page - 1) * limit;
   try {
-    const userId = req.params.userId;
-
-    const result = await pool.query(
-      `SELECT * FROM worker_category_certifications WHERE user_id = $1 ORDER BY created_at DESC`,
-      [userId]
-    );
-
-    res.status(200).json({ certifications: result.rows });
+    const [countResult, result] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM worker_category_certifications WHERE user_id = $1`, [userId]),
+      pool.query(
+        `SELECT * FROM worker_category_certifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+        [userId, limit, offset]
+      ),
+    ]);
+    const total = parseInt(countResult.rows[0].count);
+    res.status(200).json({ certifications: result.rows, pagination: { page, limit, total, hasMore: page * limit < total } });
   } catch (error) {
     console.error("[ERROR] Get worker certifications:", error);
     res.status(500).json({ error: "Database error" });
@@ -70,16 +75,24 @@ exports.getWorkerCertifications = async (req, res) => {
 
 // Admin: get all pending certifications
 exports.getPendingCertifications = async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 20);
+  const offset = (page - 1) * limit;
   try {
-    const result = await pool.query(
-      `SELECT c.*, u.first_name, u.last_name, u.email, u.phone_number
-       FROM worker_category_certifications c
-       JOIN users u ON c.user_id = u.id
-       WHERE c.status = 'pending'
-       ORDER BY c.created_at ASC`
-    );
-
-    res.status(200).json({ certifications: result.rows });
+    const [countResult, result] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM worker_category_certifications WHERE status = 'pending'`),
+      pool.query(
+        `SELECT c.*, u.first_name, u.last_name, u.email, u.phone_number
+         FROM worker_category_certifications c
+         JOIN users u ON c.user_id = u.id
+         WHERE c.status = 'pending'
+         ORDER BY c.created_at ASC
+         LIMIT $1 OFFSET $2`,
+        [limit, offset]
+      ),
+    ]);
+    const total = parseInt(countResult.rows[0].count);
+    res.status(200).json({ certifications: result.rows, pagination: { page, limit, total, hasMore: page * limit < total } });
   } catch (error) {
     console.error("[ERROR] Get pending certifications:", error);
     res.status(500).json({ error: "Database error" });

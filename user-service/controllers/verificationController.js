@@ -101,21 +101,23 @@ exports.getVerificationStatus = async (req, res) => {
 
 // Get all verifications for a user
 exports.getAllVerifications = async (req, res) => {
+  const userId = req.params.userId || req.user?.id;
+  if (!userId) {
+    return res.status(400).json({ error: "User ID is required" });
+  }
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 20);
+  const offset = (page - 1) * limit;
   try {
-    const userId = req.params.userId || req.user?.id;
-
-    if (!userId) {
-      return res.status(400).json({ error: "User ID is required" });
-    }
-
-    const result = await pool.query(
-      `SELECT * FROM verifications WHERE user_id = $1 ORDER BY created_at DESC`,
-      [userId]
-    );
-
-    res.status(200).json({
-      verifications: result.rows,
-    });
+    const [countResult, result] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM verifications WHERE user_id = $1`, [userId]),
+      pool.query(
+        `SELECT * FROM verifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+        [userId, limit, offset]
+      ),
+    ]);
+    const total = parseInt(countResult.rows[0].count);
+    res.status(200).json({ verifications: result.rows, pagination: { page, limit, total, hasMore: page * limit < total } });
   } catch (error) {
     console.error("Get all verifications error:", error);
     res.status(500).json({ error: "Database error" });
@@ -124,18 +126,24 @@ exports.getAllVerifications = async (req, res) => {
 
 // Admin: Get pending verifications
 exports.getPendingVerifications = async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 20);
+  const offset = (page - 1) * limit;
   try {
-    const result = await pool.query(
-      `SELECT v.*, u.first_name, u.last_name, u.email 
-       FROM verifications v 
-       JOIN users u ON v.user_id = u.id 
-       WHERE v.status = 'Pending' 
-       ORDER BY v.created_at ASC`
-    );
-
-    res.status(200).json({
-      pendingVerifications: result.rows,
-    });
+    const [countResult, result] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM verifications WHERE status = 'Pending'`),
+      pool.query(
+        `SELECT v.*, u.first_name, u.last_name, u.email
+         FROM verifications v
+         JOIN users u ON v.user_id = u.id
+         WHERE v.status = 'Pending'
+         ORDER BY v.created_at ASC
+         LIMIT $1 OFFSET $2`,
+        [limit, offset]
+      ),
+    ]);
+    const total = parseInt(countResult.rows[0].count);
+    res.status(200).json({ pendingVerifications: result.rows, pagination: { page, limit, total, hasMore: page * limit < total } });
   } catch (error) {
     console.error("Get pending verifications error:", error);
     res.status(500).json({ error: "Database error" });

@@ -8,9 +8,12 @@ const {
   updateUser,
   deleteUser,
   uploadProfilePicture,
+  recordJobCompleted,
+  recordNoShowCancellation,
 } = require("../controllers/userController");
 const { uploadSingle } = require("../middlewares/uploadMiddleware");
 const verifyFirebaseToken = require("../../shared/middleware/auth");
+const requireInternalKey = require("../../shared/middleware/internalAuth");
 
 const router = express.Router();
 
@@ -25,5 +28,7 @@ router.post("/", verifyFirebaseToken, createUser);
 router.put("/:id", verifyFirebaseToken, updateUser);
 router.delete("/:id", verifyFirebaseToken, deleteUser);
 router.post("/:id/upload-avatar", verifyFirebaseToken, uploadSingle, uploadProfilePicture);
+router.post("/:id/stats/completed", requireInternalKey, recordJobCompleted);
+router.post("/:id/stats/no-show", requireInternalKey, recordNoShowCancellation);
 
 module.exports = router;

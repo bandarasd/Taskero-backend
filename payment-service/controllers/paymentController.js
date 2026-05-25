@@ -107,16 +107,74 @@ exports.createPayment = async (req, res) => {
  */
 exports.getPaymentByTask = async (req, res) => {
   const { task_id } = req.params;
-
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 20);
+  const offset = (page - 1) * limit;
   try {
-    const result = await pool.query(
-      `SELECT * FROM payments WHERE task_id = $1`,
-      [task_id]
-    );
-    res.status(200).json(result.rows);
+    const [countResult, result] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM payments WHERE task_id = $1`, [task_id]),
+      pool.query(`SELECT * FROM payments WHERE task_id = $1 LIMIT $2 OFFSET $3`, [task_id, limit, offset]),
+    ]);
+    const total = parseInt(countResult.rows[0].count);
+    res.status(200).json({ data: result.rows, pagination: { page, limit, total, hasMore: page * limit < total } });
   } catch (err) {
     console.error("Error fetching payments:", err);
     res.status(500).json({ error: "Database error" });
+  }
+};
+
+/**
+ * Get all payments for a tasker (joins tasks to find tasker's payments, uses final_price)
+ */
+exports.getPaymentsByTasker = async (req, res) => {
+  const { tasker_id } = req.params;
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 20);
+  const offset = (page - 1) * limit;
+  try {
+    const [countResult, result] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM payments p JOIN tasks t ON t.id = p.task_id WHERE t.tasker_id = $1`, [tasker_id]),
+      pool.query(
+        `SELECT p.*, COALESCE(t.final_price, t.quoted_price, p.amount) AS amount
+         FROM payments p
+         JOIN tasks t ON t.id = p.task_id
+         WHERE t.tasker_id = $1
+         ORDER BY p.created_at DESC
+         LIMIT $2 OFFSET $3`,
+        [tasker_id, limit, offset]
+      ),
+    ]);
+    const total = parseInt(countResult.rows[0].count);
+    res.status(200).json({ data: result.rows, pagination: { page, limit, total, hasMore: page * limit < total } });
+  } catch (err) {
+    console.error("Error fetching tasker payments:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+};
+
+/**
+ * Issue a full refund for a task's card payment. Internal use only.
+ */
+exports.refundPayment = async (req, res) => {
+  const { taskId } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM payments WHERE task_id = $1 AND status = 'paid' AND payment_method != 'offline' LIMIT 1`,
+      [taskId]
+    );
+    if (!result.rows.length) {
+      return res.status(200).json({ refunded: false, reason: "no_card_payment" });
+    }
+    const payment = result.rows[0];
+    await stripe.refunds.create({ payment_intent: payment.stripe_payment_intent_id });
+    await pool.query(
+      `UPDATE payments SET status = 'refunded', refunded_at = NOW() WHERE id = $1`,
+      [payment.id]
+    );
+    return res.status(200).json({ refunded: true });
+  } catch (err) {
+    console.error("Error issuing refund:", err);
+    return res.status(500).json({ error: err.message });
   }
 };
 

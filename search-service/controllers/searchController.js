@@ -1,62 +1,52 @@
-const client = require("../client/elasticClient");
+const pool = require("../db");
 
-// Index a new gig or update an existing one
-exports.indexGig = async (req, res) => {
-  const { id, title, description, category, subcategory, tags } = req.body;
+// No-op stubs kept for internal route compatibility (POST /gigs, DELETE /gigs/:id)
+exports.indexGig = (req, res) => res.status(200).json({ message: "ok" });
+exports.deleteGig = (req, res) => res.status(200).json({ message: "ok" });
 
-  try {
-    const response = await client.index({
-      index: "gigs",
-      id,
-      body: { title, description, category, subcategory, tags },
-    });
-
-    await client.indices.refresh({ index: "gigs" }); // make searchable immediately
-    res.status(201).json({ message: "Gig indexed successfully", response });
-  } catch (err) {
-    console.error("Error indexing gig:", err);
-    res.status(500).json({ error: "Failed to index gig" });
-  }
-};
-
-// Delete a gig from index
-exports.deleteGig = async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    await client.delete({ index: "gigs", id });
-    await client.indices.refresh({ index: "gigs" });
-    res.status(200).json({ message: "Gig deleted from index" });
-  } catch (err) {
-    console.error("Error deleting gig:", err);
-    res.status(500).json({ error: "Failed to delete gig" });
-  }
-};
-
-// Search gigs
+// Search gigs via Postgres ILIKE across title, description, category, tags
 exports.searchGigs = async (req, res) => {
   const { q } = req.query;
+  if (!q) return res.status(400).json({ error: "Query parameter 'q' is required" });
 
-  if (!q)
-    return res.status(400).json({ error: "Query parameter 'q' is required" });
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 15);
+  const offset = (page - 1) * limit;
+  const pattern = `%${q}%`;
 
   try {
-    const response = await client.search({
-      index: "gigs",
-      query: {
-        multi_match: {
-          query: q,
-          fields: ["title^3", "description", "category", "subcategory", "tags"],
-          fuzziness: "AUTO",
-        },
-      },
-    });
+    const [countResult, result] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(DISTINCT g.id)
+         FROM gigs g
+         WHERE g.is_active = true
+           AND (g.title ILIKE $1 OR g.description ILIKE $1 OR g.category ILIKE $1)`,
+        [pattern]
+      ),
+      pool.query(
+        `SELECT g.*, u.first_name, u.last_name, u.avatar_url,
+                COALESCE(AVG(r.rating), 0)::numeric(3,2) AS tasker_rating,
+                COUNT(r.id)::int AS tasker_review_count
+         FROM gigs g
+         JOIN users u ON g.tasker_id = u.id
+         LEFT JOIN reviews r ON r.tasker_id = g.tasker_id
+         WHERE g.is_active = true
+           AND (g.title ILIKE $1 OR g.description ILIKE $1 OR g.category ILIKE $1)
+         GROUP BY g.id, u.id
+         ORDER BY g.created_at DESC
+         LIMIT $2 OFFSET $3`,
+        [pattern, limit, offset]
+      ),
+    ]);
 
-    const hits = response.hits.hits.map((hit) => ({
-      id: hit._id,
-      ...hit._source,
+    const total = parseInt(countResult.rows[0].count);
+    const data = result.rows.map(({ first_name, last_name, avatar_url, tasker_rating, tasker_review_count, ...gig }) => ({
+      ...gig,
+      rating: parseFloat(tasker_rating),
+      review_count: tasker_review_count,
+      tasker: { id: gig.tasker_id, first_name, last_name, avatar_url },
     }));
-    res.status(200).json(hits);
+    res.status(200).json({ data, pagination: { page, limit, total, hasMore: page * limit < total } });
   } catch (err) {
     console.error("Error searching gigs:", err);
     res.status(500).json({ error: "Search failed" });

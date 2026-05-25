@@ -5,9 +5,16 @@ const normalizePhone = require("../utils/phone");
 
 // Get all users
 exports.getUsers = async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 20);
+  const offset = (page - 1) * limit;
   try {
-    const result = await pool.query("SELECT * FROM users");
-    res.json(result.rows);
+    const [countResult, result] = await Promise.all([
+      pool.query("SELECT COUNT(*) FROM users"),
+      pool.query("SELECT * FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2", [limit, offset]),
+    ]);
+    const total = parseInt(countResult.rows[0].count);
+    res.json({ data: result.rows, pagination: { page, limit, total, hasMore: page * limit < total } });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Database error" });
@@ -245,5 +252,46 @@ exports.uploadProfilePicture = async (req, res) => {
   } catch (error) {
     console.error("Profile picture upload error:", error);
     res.status(500).json({ error: "Failed to upload profile picture" });
+  }
+};
+
+
+exports.recordJobCompleted = async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query(
+      `UPDATE users
+       SET completed_jobs = completed_jobs + 1,
+           completion_rate = ROUND(
+             (completed_jobs + 1)::numeric /
+             NULLIF(completed_jobs + 1 + no_show_cancellations, 0) * 100, 1
+           )
+       WHERE id = $1`,
+      [id]
+    );
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("Error recording job completed:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+exports.recordNoShowCancellation = async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query(
+      `UPDATE users
+       SET no_show_cancellations = no_show_cancellations + 1,
+           completion_rate = ROUND(
+             completed_jobs::numeric /
+             NULLIF(completed_jobs + no_show_cancellations + 1, 0) * 100, 1
+           )
+       WHERE id = $1`,
+      [id]
+    );
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("Error recording no-show cancellation:", err);
+    res.status(500).json({ error: "Internal server error" });
   }
 };

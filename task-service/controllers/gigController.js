@@ -162,6 +162,9 @@ exports.getAllGigs = async (req, res) => {
   const lat = req.query.lat != null ? parseFloat(req.query.lat) : null;
   const lng = req.query.lng != null ? parseFloat(req.query.lng) : null;
   const useLocation = lat !== null && !isNaN(lat) && lng !== null && !isNaN(lng);
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 15);
+  const offset = (page - 1) * limit;
 
   try {
     const params = [];
@@ -179,19 +182,39 @@ exports.getAllGigs = async (req, res) => {
         )`;
     }
 
-    const result = await pool.query(
-      `SELECT g.*, u.first_name, u.last_name, u.avatar_url
-       FROM gigs g
-       JOIN users u ON g.tasker_id = u.id
-       WHERE g.is_active = true${locationClause}
-       ORDER BY g.created_at DESC`,
-      params
-    );
-    const gigs = result.rows.map(({ first_name, last_name, avatar_url, ...gig }) => ({
+    const baseWhere = `WHERE g.is_active = true${locationClause}`;
+    const countParams = [...params];
+    const dataParams = [...params, limit, offset];
+    const limitOffset = `LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+
+    const [countResult, result] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(DISTINCT g.id) FROM gigs g ${baseWhere}`,
+        countParams
+      ),
+      pool.query(
+        `SELECT g.*, u.first_name, u.last_name, u.avatar_url,
+                COALESCE(AVG(r.rating), 0)::numeric(3,2) AS tasker_rating,
+                COUNT(r.id)::int AS tasker_review_count
+         FROM gigs g
+         JOIN users u ON g.tasker_id = u.id
+         LEFT JOIN reviews r ON r.tasker_id = g.tasker_id
+         ${baseWhere}
+         GROUP BY g.id, u.id
+         ORDER BY g.created_at DESC
+         ${limitOffset}`,
+        dataParams
+      ),
+    ]);
+
+    const total = parseInt(countResult.rows[0].count);
+    const gigs = result.rows.map(({ first_name, last_name, avatar_url, tasker_rating, tasker_review_count, ...gig }) => ({
       ...gig,
+      rating: parseFloat(tasker_rating),
+      review_count: tasker_review_count,
       tasker: { id: gig.tasker_id, first_name, last_name, avatar_url },
     }));
-    res.status(200).json(gigs);
+    res.status(200).json({ data: gigs, pagination: { page, limit, total, hasMore: page * limit < total } });
   } catch (error) {
     console.error("[ERROR] Fetching all gigs failed:", error);
     res.status(500).json({ error: "Database error" });
@@ -240,12 +263,19 @@ exports.getGigById = async (req, res) => {
 // Get gigs by tasker
 exports.getGigsByTasker = async (req, res) => {
   const { tasker_id } = req.params;
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 20);
+  const offset = (page - 1) * limit;
   try {
-    const result = await pool.query(
-      `SELECT * FROM gigs WHERE tasker_id = $1 ORDER BY created_at DESC`,
-      [tasker_id]
-    );
-    res.status(200).json(result.rows);
+    const [countResult, result] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM gigs WHERE tasker_id = $1`, [tasker_id]),
+      pool.query(
+        `SELECT * FROM gigs WHERE tasker_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+        [tasker_id, limit, offset]
+      ),
+    ]);
+    const total = parseInt(countResult.rows[0].count);
+    res.status(200).json({ data: result.rows, pagination: { page, limit, total, hasMore: page * limit < total } });
   } catch (error) {
     console.error("[ERROR] Fetching gigs failed:", error);
     res.status(500).json({ error: "Database error" });
@@ -259,6 +289,9 @@ exports.getGigsByCategory = async (req, res) => {
   const lat = req.query.lat != null ? parseFloat(req.query.lat) : null;
   const lng = req.query.lng != null ? parseFloat(req.query.lng) : null;
   const useLocation = lat !== null && !isNaN(lat) && lng !== null && !isNaN(lng);
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 15);
+  const offset = (page - 1) * limit;
 
   try {
     const params = [category];
@@ -276,19 +309,37 @@ exports.getGigsByCategory = async (req, res) => {
         )`;
     }
 
-    const result = await pool.query(
-      `SELECT g.*, u.first_name, u.last_name, u.avatar_url
-       FROM gigs g
-       JOIN users u ON g.tasker_id = u.id
-       WHERE g.is_active = true AND LOWER(g.category) = LOWER($1)${locationClause}
-       ORDER BY g.created_at DESC`,
-      params
-    );
-    const gigs = result.rows.map(({ first_name, last_name, avatar_url, ...gig }) => ({
+    const baseWhere = `WHERE g.is_active = true AND LOWER(g.category) = LOWER($1)${locationClause}`;
+    const countParams = [...params];
+    const dataParams = [...params, limit, offset];
+    const nBase = params.length;
+    const limitOffset = `LIMIT $${nBase + 1} OFFSET $${nBase + 2}`;
+
+    const [countResult, result] = await Promise.all([
+      pool.query(`SELECT COUNT(DISTINCT g.id) FROM gigs g ${baseWhere}`, countParams),
+      pool.query(
+        `SELECT g.*, u.first_name, u.last_name, u.avatar_url,
+                COALESCE(AVG(r.rating), 0)::numeric(3,2) AS tasker_rating,
+                COUNT(r.id)::int AS tasker_review_count
+         FROM gigs g
+         JOIN users u ON g.tasker_id = u.id
+         LEFT JOIN reviews r ON r.tasker_id = g.tasker_id
+         ${baseWhere}
+         GROUP BY g.id, u.id
+         ORDER BY g.created_at DESC
+         ${limitOffset}`,
+        dataParams
+      ),
+    ]);
+
+    const total = parseInt(countResult.rows[0].count);
+    const gigs = result.rows.map(({ first_name, last_name, avatar_url, tasker_rating, tasker_review_count, ...gig }) => ({
       ...gig,
+      rating: parseFloat(tasker_rating),
+      review_count: tasker_review_count,
       tasker: { id: gig.tasker_id, first_name, last_name, avatar_url },
     }));
-    res.status(200).json(gigs);
+    res.status(200).json({ data: gigs, pagination: { page, limit, total, hasMore: page * limit < total } });
   } catch (error) {
     console.error("[ERROR] Fetching gigs by category failed:", error);
     res.status(500).json({ error: "Database error" });
