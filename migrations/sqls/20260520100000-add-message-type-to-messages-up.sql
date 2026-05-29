@@ -1,0 +1,3 @@
+ALTER TABLE messages
+  ADD COLUMN message_type VARCHAR(20) NOT NULL DEFAULT 'text',
+  ADD COLUMN ref_task_id UUID REFERENCES tasks(id) ON DELETE SET NULL;

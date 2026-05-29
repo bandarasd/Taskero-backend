@@ -1,0 +1,1 @@
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS payment_method VARCHAR(20) DEFAULT 'cash';

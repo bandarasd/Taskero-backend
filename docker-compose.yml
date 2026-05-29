@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: taskero_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dana
+      POSTGRES_PASSWORD: dana2002
+      POSTGRES_DB: taskero_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - taskero_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dana -d taskero_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  taskero_pgdata:
+    driver: local

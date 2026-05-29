@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: taskero
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification-service
+  template:
+    metadata:
+      labels:
+        app: notification-service
+    spec:
+      containers:
+        - name: notification-service
+          image: REGISTRY/taskero-notification-service:latest
+          ports:
+            - containerPort: 3006
+          envFrom:
+            - secretRef:
+                name: taskero-db-secret
+            - secretRef:
+                name: taskero-internal-secret
+          env:
+            - name: PORT
+              value: "3006"
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /secrets/firebase/serviceAccountKey.json
+          volumeMounts:
+            - name: firebase-secret
+              mountPath: /secrets/firebase
+              readOnly: true
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+      volumes:
+        - name: firebase-secret
+          secret:
+            secretName: taskero-firebase-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  namespace: taskero
+spec:
+  selector:
+    app: notification-service
+  ports:
+    - port: 3006
+      targetPort: 3006

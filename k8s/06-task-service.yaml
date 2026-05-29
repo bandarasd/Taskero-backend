@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: task-service
+  namespace: taskero
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: task-service
+  template:
+    metadata:
+      labels:
+        app: task-service
+    spec:
+      containers:
+        - name: task-service
+          image: REGISTRY/taskero-task-service:latest
+          ports:
+            - containerPort: 3002
+          envFrom:
+            - secretRef:
+                name: taskero-db-secret
+            - secretRef:
+                name: taskero-cloudinary-secret
+            - secretRef:
+                name: taskero-internal-secret
+          env:
+            - name: PORT
+              value: "3002"
+            - name: GIG_SEARCH_SERVICE_URL
+              value: "http://search-service:3005"
+            - name: NOTIFICATION_SERVICE_URL
+              value: "http://notification-service:3006"
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /secrets/firebase/serviceAccountKey.json
+          volumeMounts:
+            - name: firebase-secret
+              mountPath: /secrets/firebase
+              readOnly: true
+          resources:
+            requests:
+              memory: "96Mi"
+              cpu: "50m"
+            limits:
+              memory: "192Mi"
+              cpu: "300m"
+      volumes:
+        - name: firebase-secret
+          secret:
+            secretName: taskero-firebase-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: task-service
+  namespace: taskero
+spec:
+  selector:
+    app: task-service
+  ports:
+    - port: 3002
+      targetPort: 3002

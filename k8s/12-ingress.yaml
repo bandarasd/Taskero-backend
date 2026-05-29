@@ -1,0 +1,24 @@
+# MicroK8s nginx ingress — exposes the api-gateway on port 80 (and 443 if you add a cert).
+# Replace YOUR_EC2_PUBLIC_IP or YOUR_DOMAIN with your actual value.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: taskero-ingress
+  namespace: taskero
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: YOUR_DOMAIN_OR_IP   # ← replace with EC2 public IP or domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 3000

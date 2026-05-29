@@ -1,0 +1,28 @@
+-- Convert all bare TIMESTAMP columns to TIMESTAMPTZ so pg driver
+-- always treats stored values as UTC, regardless of server timezone.
+
+ALTER TABLE tasks
+  ALTER COLUMN due_date      TYPE TIMESTAMPTZ USING due_date AT TIME ZONE 'UTC',
+  ALTER COLUMN accepted_at   TYPE TIMESTAMPTZ USING accepted_at AT TIME ZONE 'UTC',
+  ALTER COLUMN completed_at  TYPE TIMESTAMPTZ USING completed_at AT TIME ZONE 'UTC',
+  ALTER COLUMN quoted_at     TYPE TIMESTAMPTZ USING quoted_at AT TIME ZONE 'UTC',
+  ALTER COLUMN created_at    TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC',
+  ALTER COLUMN updated_at    TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
+
+ALTER TABLE users
+  ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC',
+  ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
+
+ALTER TABLE gigs
+  ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC',
+  ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at AT TIME ZONE 'UTC';
+
+ALTER TABLE reviews
+  ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+
+ALTER TABLE notifications
+  ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
+
+ALTER TABLE payments
+  ALTER COLUMN paid_at    TYPE TIMESTAMPTZ USING paid_at AT TIME ZONE 'UTC',
+  ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at AT TIME ZONE 'UTC';
