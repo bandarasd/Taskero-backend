@@ -11,6 +11,7 @@ const {
   recordNoShowCancellation,
   incrementCancellationCount,
 } = require("../controllers/userController");
+const { register } = require("../controllers/authController");
 const { uploadSingle } = require("../middlewares/uploadMiddleware");
 const verifyFirebaseToken = require("../../shared/middleware/auth");
 const attachUser = require("../../shared/middleware/attachUser");
@@ -35,6 +36,7 @@ router.get("/firebase/:uid", lookupLimiter, getUserByFirebaseUid);
 router.get("/:id", getUserById);
 
 // Protected routes (require Firebase auth)
+router.post("/", ...auth, register);
 router.get("/", ...auth, getUsers);
 router.put("/:id", ...auth, updateUser);
 router.delete("/:id", ...auth, deleteUser);
