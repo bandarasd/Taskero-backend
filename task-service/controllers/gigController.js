@@ -1,5 +1,17 @@
 const pool = require("../db");
 const axios = require("axios");
+const cache = require("../../shared/cache");
+
+const GIG_LISTING_TTL = 300;  // 5 minutes
+const GIG_DETAIL_TTL = 120;   // 2 minutes
+
+async function invalidateGigCaches(gigId) {
+  await Promise.all([
+    cache.del(`gig:${gigId}`),
+    cache.delPattern("gigs:all:*"),
+    cache.delPattern("gigs:cat:*"),
+  ]);
+}
 
 async function requiresCertification(category) {
   const result = await pool.query(
@@ -184,6 +196,7 @@ exports.createGig = async (req, res) => {
       tags: gig.tags,
     });
 
+    await invalidateGigCaches(gig.id);
     res.status(201).json(gig);
   } catch (error) {
     console.error("[ERROR] Creating gig failed:", error);
@@ -202,7 +215,14 @@ exports.getAllGigs = async (req, res) => {
   const limit = Math.min(50, parseInt(req.query.limit) || 15);
   const offset = (page - 1) * limit;
 
+  const cacheKey = useLocation ? null : `gigs:all:p${page}:l${limit}`;
+
   try {
+    if (cacheKey) {
+      const cached = await cache.get(cacheKey);
+      if (cached) return res.status(200).json(cached);
+    }
+
     const params = [];
     let locationClause = "";
     if (useLocation) {
@@ -250,7 +270,9 @@ exports.getAllGigs = async (req, res) => {
       review_count: tasker_review_count,
       tasker: { id: gig.tasker_id, first_name, last_name, avatar_url },
     }));
-    res.status(200).json({ data: gigs, pagination: { page, limit, total, hasMore: page * limit < total } });
+    const payload = { data: gigs, pagination: { page, limit, total, hasMore: page * limit < total } };
+    if (cacheKey) await cache.set(cacheKey, payload, GIG_LISTING_TTL);
+    res.status(200).json(payload);
   } catch (error) {
     console.error("[ERROR] Fetching all gigs failed:", error);
     res.status(500).json({ error: "Database error" });
@@ -261,6 +283,9 @@ exports.getAllGigs = async (req, res) => {
 exports.getGigById = async (req, res) => {
   const { id } = req.params;
   try {
+    const cached = await cache.get(`gig:${id}`);
+    if (cached) return res.status(200).json(cached);
+
     const result = await pool.query(
       `SELECT g.*,
               u.first_name, u.last_name, u.avatar_url, u.bio,
@@ -278,7 +303,7 @@ exports.getGigById = async (req, res) => {
     }
     const row = result.rows[0];
     const { first_name, last_name, avatar_url, bio, tasker_rating, tasker_review_count, ...gig } = row;
-    res.status(200).json({
+    const payload = {
       ...gig,
       tasker: {
         id: gig.tasker_id,
@@ -289,7 +314,9 @@ exports.getGigById = async (req, res) => {
         rating: parseFloat(tasker_rating),
         review_count: tasker_review_count,
       },
-    });
+    };
+    await cache.set(`gig:${id}`, payload, GIG_DETAIL_TTL);
+    res.status(200).json(payload);
   } catch (error) {
     console.error("[ERROR] Fetching gig failed:", error);
     res.status(500).json({ error: "Database error" });
@@ -329,7 +356,14 @@ exports.getGigsByCategory = async (req, res) => {
   const limit = Math.min(50, parseInt(req.query.limit) || 15);
   const offset = (page - 1) * limit;
 
+  const cacheKey = useLocation ? null : `gigs:cat:${category.toLowerCase()}:p${page}:l${limit}`;
+
   try {
+    if (cacheKey) {
+      const cached = await cache.get(cacheKey);
+      if (cached) return res.status(200).json(cached);
+    }
+
     const params = [category];
     let locationClause = "";
     if (useLocation) {
@@ -375,7 +409,9 @@ exports.getGigsByCategory = async (req, res) => {
       review_count: tasker_review_count,
       tasker: { id: gig.tasker_id, first_name, last_name, avatar_url },
     }));
-    res.status(200).json({ data: gigs, pagination: { page, limit, total, hasMore: page * limit < total } });
+    const payload = { data: gigs, pagination: { page, limit, total, hasMore: page * limit < total } };
+    if (cacheKey) await cache.set(cacheKey, payload, GIG_LISTING_TTL);
+    res.status(200).json(payload);
   } catch (error) {
     console.error("[ERROR] Fetching gigs by category failed:", error);
     res.status(500).json({ error: "Database error" });
@@ -540,6 +576,7 @@ exports.updateGig = async (req, res) => {
       tags: gig.tags,
     });
 
+    await invalidateGigCaches(id);
     res.status(200).json(gig);
   } catch (error) {
     console.error("[ERROR] Updating gig failed:", error);
@@ -568,6 +605,7 @@ exports.toggleGigStatus = async (req, res) => {
       [is_active, id]
     );
 
+    await invalidateGigCaches(id);
     res.status(200).json(result.rows[0]);
   } catch (error) {
     console.error("[ERROR] Toggling gig status failed:", error);
@@ -592,6 +630,7 @@ exports.deleteGig = async (req, res) => {
     );
 
     await deleteGigFromSearch(id);
+    await invalidateGigCaches(id);
 
     res.status(200).json({ message: "Gig deleted successfully" });
   } catch (error) {

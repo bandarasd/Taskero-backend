@@ -1,4 +1,7 @@
 const pool = require("../db");
+const cache = require("../../shared/cache");
+
+const REVIEW_TTL = 300; // 5 minutes
 
 // create a review
 exports.createReview = async (req, res) => {
@@ -33,6 +36,7 @@ exports.createReview = async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
       [task_id, t.gig_id, t.customer_id, t.tasker_id, rating, review ?? body ?? null]
     );
+    await cache.delPattern(`reviews:tasker:${t.tasker_id}:*`);
     return res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error("Error creating review:", error);
@@ -46,7 +50,11 @@ exports.getReviewsOfTasker = async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.min(50, parseInt(req.query.limit) || 10);
   const offset = (page - 1) * limit;
+  const cacheKey = `reviews:tasker:${tasker_id}:p${page}:l${limit}`;
   try {
+    const cached = await cache.get(cacheKey);
+    if (cached) return res.status(200).json(cached);
+
     const [countResult, reviews] = await Promise.all([
       pool.query(`SELECT COUNT(*) FROM reviews WHERE tasker_id = $1`, [tasker_id]),
       pool.query(
@@ -64,7 +72,9 @@ exports.getReviewsOfTasker = async (req, res) => {
       ...r,
       reviewer: first_name ? { first_name, last_name, avatar_url } : null,
     }));
-    return res.status(200).json({ data, pagination: { page, limit, total, hasMore: page * limit < total } });
+    const payload = { data, pagination: { page, limit, total, hasMore: page * limit < total } };
+    await cache.set(cacheKey, payload, REVIEW_TTL);
+    return res.status(200).json(payload);
   } catch (error) {
     console.error("Error fetching reviews of tasker:", error);
     return res.status(500).json({ error: "Internal server error" });

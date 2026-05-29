@@ -1,4 +1,5 @@
 const pool = require("../db");
+const cache = require("../../shared/cache");
 
 const normalizePhone = require("../utils/phone");
 
@@ -125,7 +126,11 @@ exports.deleteUser = async (req, res) => {
     );
     if (result.rows.length === 0)
       return res.status(404).json({ error: "User not found" });
-    res.json({ message: "User deleted", user: result.rows[0] });
+    const deleted = result.rows[0];
+    if (deleted.firebase_uid) {
+      await cache.del(`uid:${deleted.firebase_uid}`);
+    }
+    res.json({ message: "User deleted", user: deleted });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Database error" });
