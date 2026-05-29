@@ -1,0 +1,53 @@
+# Run once after postgres is up to apply all migrations.
+# kubectl apply -f 03-db-migrate-job.yaml -n taskero
+# kubectl wait --for=condition=complete job/db-migrate -n taskero --timeout=120s
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  namespace: taskero
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z postgres-service 5432; do
+                echo "waiting for postgres..."; sleep 2;
+              done
+      containers:
+        - name: migrate
+          image: REGISTRY/taskero-user-service:latest   # reuse any service image that has migrations
+          command: ["sh", "-c", "npx db-migrate up --config database.json --env production"]
+          workingDir: /app
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: taskero-db-secret
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: taskero-db-secret
+                  key: DB_PASSWORD
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: taskero-db-secret
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: taskero-db-secret
+                  key: DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: taskero-db-secret
+                  key: DB_NAME

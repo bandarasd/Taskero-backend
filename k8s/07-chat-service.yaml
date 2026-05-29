@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-service
+  namespace: taskero
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chat-service
+  template:
+    metadata:
+      labels:
+        app: chat-service
+    spec:
+      containers:
+        - name: chat-service
+          image: REGISTRY/taskero-chat-service:latest
+          ports:
+            - containerPort: 3003
+          envFrom:
+            - secretRef:
+                name: taskero-db-secret
+          env:
+            - name: PORT
+              value: "3003"
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /secrets/firebase/serviceAccountKey.json
+          volumeMounts:
+            - name: firebase-secret
+              mountPath: /secrets/firebase
+              readOnly: true
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+      volumes:
+        - name: firebase-secret
+          secret:
+            secretName: taskero-firebase-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-service
+  namespace: taskero
+spec:
+  selector:
+    app: chat-service
+  ports:
+    - port: 3003
+      targetPort: 3003
