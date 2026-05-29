@@ -1,4 +1,3 @@
-const bcrypt = require("bcryptjs");
 const pool = require("../db");
 
 const normalizePhone = require("../utils/phone");
@@ -69,96 +68,6 @@ exports.getUserByPhone = async (req, res) => {
   }
 };
 
-// Create a new user (requires Firebase auth).
-// If a user with this phone_number or firebase_uid already exists, return them instead of creating a duplicate.
-exports.createUser = async (req, res) => {
-    const {
-    email,
-    first_name,
-    last_name,
-    phone_number,
-    password,
-    role,
-    avatar_url,
-    bio,
-    dob,
-    gender,
-    address_line1,
-    address_line2,
-    city,
-    postal_code,
-    location,
-    preferences,
-    settings,
-  } = req.body;
-  // firebase_uid comes from the verified token — not from the request body
-  const firebase_uid = req.user.firebaseUid;
-
-  try {
-    // If phone already exists, return the existing user (prevents duplicate registrations)
-    if (phone_number) {
-      const existing = await pool.query(
-        "SELECT * FROM users WHERE phone_number = $1",
-        [normalizePhone(phone_number)]
-      );
-      if (existing.rows.length > 0) {
-        return res.status(200).json(existing.rows[0]);
-      }
-    }
-
-    // If firebase_uid already exists, return the existing user (social sign-in retry)
-    if (firebase_uid) {
-      const existing = await pool.query(
-        "SELECT * FROM users WHERE firebase_uid = $1",
-        [firebase_uid]
-      );
-      if (existing.rows.length > 0) {
-        return res.status(200).json(existing.rows[0]);
-      }
-    }
-
-    // Hash password if provided
-    let passwordHash = null;
-    if (password) {
-      const salt = await bcrypt.genSalt(10);
-      passwordHash = await bcrypt.hash(password, salt);
-    }
-
-    const result = await pool.query(
-      `INSERT INTO users
-      (email, first_name, last_name, phone_number, password_hash, role, firebase_uid, avatar_url, bio, dob, gender, address_line1, address_line2, city, postal_code, location, preferences, settings)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
-      [
-        email,
-        first_name,
-        last_name,
-        phone_number || null,
-        passwordHash,
-        role || 'customer',
-        firebase_uid || null,
-        avatar_url,
-        bio,
-        dob,
-        gender,
-        address_line1,
-        address_line2,
-        city,
-        postal_code,
-        location,
-        preferences || {},
-        settings || {},
-      ]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (error) {
-    console.error(error);
-    if (error.code === "23505") {
-      res.status(400).json({ error: "Email already exists" });
-    } else {
-      res.status(500).json({ error: "Database error" });
-    }
-  }
-};
 
 const UPDATABLE_USER_FIELDS = new Set([
   "email", "first_name", "last_name", "phone_number", "avatar_url", "bio",
@@ -169,6 +78,9 @@ const UPDATABLE_USER_FIELDS = new Set([
 // Update a user
 exports.updateUser = async (req, res) => {
   const { id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
+  if (callerId !== id) return res.status(403).json({ error: "Forbidden" });
   const raw = req.body;
 
   const fields = Object.fromEntries(
@@ -203,6 +115,9 @@ exports.updateUser = async (req, res) => {
 // Delete a user
 exports.deleteUser = async (req, res) => {
   const { id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
+  if (callerId !== id) return res.status(403).json({ error: "Forbidden" });
   try {
     const result = await pool.query(
       "DELETE FROM users WHERE id = $1 RETURNING *",
@@ -220,6 +135,9 @@ exports.deleteUser = async (req, res) => {
 // Upload profile picture
 exports.uploadProfilePicture = async (req, res) => {
   const { id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
+  if (callerId !== id) return res.status(403).json({ error: "Forbidden" });
 
   try {
     // Check if user exists
@@ -292,6 +210,21 @@ exports.recordNoShowCancellation = async (req, res) => {
     res.status(200).json({ ok: true });
   } catch (err) {
     console.error("Error recording no-show cancellation:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+exports.incrementCancellationCount = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `UPDATE users SET cancellation_count = cancellation_count + 1 WHERE id = $1 RETURNING cancellation_count`,
+      [id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: "User not found" });
+    res.status(200).json({ ok: true, cancellation_count: result.rows[0].cancellation_count });
+  } catch (err) {
+    console.error("Error incrementing cancellation count:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 };

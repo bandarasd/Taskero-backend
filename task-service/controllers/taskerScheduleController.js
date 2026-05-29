@@ -19,6 +19,9 @@ exports.getSchedule = async (req, res) => {
 // Body: [{ day_of_week, morning_available, afternoon_available, evening_available, is_active }]
 exports.upsertSchedule = async (req, res) => {
   const { tasker_id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
+  if (callerId !== tasker_id) return res.status(403).json({ error: "Forbidden" });
   const days = req.body;
 
   if (!Array.isArray(days) || days.length === 0) {

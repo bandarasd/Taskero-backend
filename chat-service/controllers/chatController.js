@@ -3,6 +3,11 @@ const { notifyUser } = require("../utils/notify");
 
 exports.getOrCreateThread = async (req, res) => {
   const { customer_id, tasker_id } = req.body;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
+  if (callerId !== customer_id && callerId !== tasker_id) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
   try {
     let result = await pool.query(
       `SELECT * FROM chat_threads WHERE customer_id = $1 AND tasker_id = $2`,
@@ -22,7 +27,8 @@ exports.getOrCreateThread = async (req, res) => {
 };
 
 exports.getThreadsByUser = async (req, res) => {
-  const { user_id } = req.params;
+  const user_id = req.user?.id;
+  if (!user_id) return res.status(401).json({ error: "Unauthorized" });
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.min(50, parseInt(req.query.limit) || 20);
   const offset = (page - 1) * limit;
@@ -83,9 +89,24 @@ exports.getThreadsByUser = async (req, res) => {
 };
 
 exports.sendMessage = async (req, res) => {
-  const { thread_id, sender_id, message_text, attachments, message_type, ref_task_id } = req.body;
+  const sender_id = req.user?.id;
+  if (!sender_id) return res.status(401).json({ error: "Unauthorized" });
+  const { thread_id, message_text, attachments, message_type, ref_task_id } = req.body;
   const msgType = message_type || 'text';
   try {
+    // Verify sender belongs to the thread
+    const threadResult = await pool.query(
+      `SELECT customer_id, tasker_id FROM chat_threads WHERE id = $1`,
+      [thread_id]
+    );
+    if (threadResult.rows.length === 0) {
+      return res.status(404).json({ error: "Thread not found" });
+    }
+    const { customer_id, tasker_id } = threadResult.rows[0];
+    if (sender_id !== customer_id && sender_id !== tasker_id) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     const result = await pool.query(
       `INSERT INTO messages (thread_id, sender_id, message_text, attachments, message_type, ref_task_id)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
@@ -94,22 +115,15 @@ exports.sendMessage = async (req, res) => {
     const message = result.rows[0];
 
     // Notify the other participant
-    const threadResult = await pool.query(
-      `SELECT customer_id, tasker_id FROM chat_threads WHERE id = $1`,
-      [thread_id]
-    );
-    if (threadResult.rows.length > 0) {
-      const { customer_id, tasker_id } = threadResult.rows[0];
-      const recipient_id = sender_id === customer_id ? tasker_id : customer_id;
-      const notifBody = msgType === 'booking_ref' ? 'Shared a booking' : message_text;
-      notifyUser({
-        user_id: recipient_id,
-        title: "New message",
-        body: notifBody,
-        type: "chat",
-        data: { thread_id },
-      });
-    }
+    const recipient_id = sender_id === customer_id ? tasker_id : customer_id;
+    const notifBody = msgType === 'booking_ref' ? 'Shared a booking' : message_text;
+    notifyUser({
+      user_id: recipient_id,
+      title: "New message",
+      body: notifBody,
+      type: "chat",
+      data: { thread_id },
+    });
 
     res.status(201).json(message);
   } catch (error) {
@@ -120,10 +134,22 @@ exports.sendMessage = async (req, res) => {
 
 exports.getMessagesByThread = async (req, res) => {
   const { thread_id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
   // cursor-based: ?before=<message_id> loads older messages; omit for latest page
   const before = req.query.before || null;
   const limit = Math.min(100, parseInt(req.query.limit) || 30);
   try {
+    // Verify caller belongs to this thread
+    const threadCheck = await pool.query(
+      `SELECT customer_id, tasker_id FROM chat_threads WHERE id = $1`,
+      [thread_id]
+    );
+    if (!threadCheck.rows[0]) return res.status(404).json({ error: "Thread not found" });
+    const { customer_id, tasker_id } = threadCheck.rows[0];
+    if (callerId !== customer_id && callerId !== tasker_id) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
     const params = [thread_id, limit];
     let cursorClause = "";
     if (before) {
@@ -152,8 +178,19 @@ exports.getMessagesByThread = async (req, res) => {
 
 exports.markMessagesRead = async (req, res) => {
   const { thread_id } = req.params;
-  const { reader_id } = req.body;
+  const reader_id = req.user?.id;
+  if (!reader_id) return res.status(401).json({ error: "Unauthorized" });
   try {
+    // Verify reader belongs to this thread
+    const thread = await pool.query(
+      `SELECT customer_id, tasker_id FROM chat_threads WHERE id = $1`,
+      [thread_id]
+    );
+    if (thread.rows.length === 0) return res.status(404).json({ error: "Thread not found" });
+    const { customer_id, tasker_id } = thread.rows[0];
+    if (reader_id !== customer_id && reader_id !== tasker_id) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
     await pool.query(
       `UPDATE messages SET is_read = true WHERE thread_id = $1 AND sender_id != $2 AND is_read = false`,
       [thread_id, reader_id]

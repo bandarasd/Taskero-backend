@@ -7,7 +7,17 @@ const { createProxyMiddleware } = require("http-proxy-middleware");
 const app = express();
 
 // Middleware
-app.use(cors({ origin: process.env.FRONTEND_URL || "*" }));
+const allowedOrigins = (process.env.FRONTEND_URL || "").split(",").map(s => s.trim()).filter(Boolean);
+app.use(cors({
+  origin: (origin, cb) => {
+    // Allow requests with no origin (mobile apps, curl) or whitelisted origins
+    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Not allowed by CORS"));
+    }
+  },
+}));
 app.use((req, _res, next) => {
   console.log(`[gateway] ${req.method} ${req.url} from ${req.ip}`);
   next();

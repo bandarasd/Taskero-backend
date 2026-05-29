@@ -4,11 +4,11 @@ const NOTIFICATION_URL =
   process.env.NOTIFICATION_SERVICE_URL || "http://localhost:3006";
 const INTERNAL_KEY = process.env.INTERNAL_API_KEY;
 
-async function notifyUser({ user_id, title, body, type, data = {} }) {
+async function notifyUser({ user_id, title, body, type, data = {}, idempotency_key }) {
   try {
     await axios.post(
       `${NOTIFICATION_URL}/notifications/internal/create`,
-      { user_id, title, body, type, data },
+      { user_id, title, body, type, data, idempotency_key },
       { headers: { "x-internal-key": INTERNAL_KEY }, timeout: 3000 }
     );
   } catch (err) {

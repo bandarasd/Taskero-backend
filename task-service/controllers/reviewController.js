@@ -2,21 +2,36 @@ const pool = require("../db");
 
 // create a review
 exports.createReview = async (req, res) => {
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
   const { task_id, rating, review, body } = req.body;
   try {
     // Check if the task exists
-    const task = await pool.query(`SELECT * FROM tasks WHERE id = $1`, [
-      task_id,
-    ]);
+    const task = await pool.query(`SELECT * FROM tasks WHERE id = $1`, [task_id]);
     if (task.rows.length === 0) {
       return res.status(404).json({ error: "Task not found" });
+    }
+    const t = task.rows[0];
+    if (callerId !== t.customer_id) {
+      return res.status(403).json({ error: "Only the task customer can leave a review" });
+    }
+    if (t.status !== "completed") {
+      return res.status(400).json({ error: "Can only review completed tasks" });
+    }
+    // Prevent duplicate review
+    const existing = await pool.query(
+      `SELECT id FROM reviews WHERE task_id = $1 AND reviewer_id = $2`,
+      [task_id, callerId]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: "You have already reviewed this task" });
     }
 
     // Insert the review into the reviews table (populate reviewer/tasker from the task)
     const result = await pool.query(
       `INSERT INTO reviews(task_id, gig_id, reviewer_id, tasker_id, rating, review)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [task_id, task.rows[0].gig_id, task.rows[0].customer_id, task.rows[0].tasker_id, rating, review ?? body ?? null]
+      [task_id, t.gig_id, t.customer_id, t.tasker_id, rating, review ?? body ?? null]
     );
     return res.status(201).json(result.rows[0]);
   } catch (error) {

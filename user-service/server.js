@@ -2,10 +2,10 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const pool = require("./db");
+const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
 const verificationRoutes = require("./routes/verificationRoutes");
 const certificationRoutes = require("./routes/certificationRoutes");
-const authRoutes = require("./routes/authRoutes");
 const attachUser = require("../shared/middleware/attachUser");
 
 const app = express();
@@ -20,7 +20,7 @@ app.use((req, _res, next) => {
 // Health check
 app.get("/health", (req, res) => res.json({ status: "User service running" }));
 
-// Auth routes (send-otp, verify-otp, register)
+// Auth routes (register after OTP verification)
 app.use("/auth", authRoutes);
 
 // User routes

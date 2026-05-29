@@ -69,8 +69,9 @@ const parseAttachments = (files, bodyAttachments) => {
 
 // Create a new gig
 exports.createGig = async (req, res) => {
+  const tasker_id = req.user?.id;
+  if (!tasker_id) return res.status(401).json({ error: "Unauthorized" });
   const {
-    tasker_id,
     title,
     description,
     category,
@@ -423,6 +424,9 @@ exports.updateGig = async (req, res) => {
     }
   }
 
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
+
   try {
     const currentRow = await pool.query(
       `SELECT tasker_id, title, description, category, subcategory, base_price, visit_tiers, tags, attachments
@@ -433,6 +437,7 @@ exports.updateGig = async (req, res) => {
       return res.status(404).json({ error: "Gig not found" });
     }
     const current = currentRow.rows[0];
+    if (callerId !== current.tasker_id) return res.status(403).json({ error: "Forbidden" });
 
     // Certification gate for category changes
     const effectiveCategory = category ?? current.category;
@@ -545,6 +550,8 @@ exports.updateGig = async (req, res) => {
 // Toggle gig active status
 exports.toggleGigStatus = async (req, res) => {
   const { id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
   const { is_active } = req.body;
 
   if (typeof is_active !== "boolean") {
@@ -552,14 +559,14 @@ exports.toggleGigStatus = async (req, res) => {
   }
 
   try {
+    const gigRow = await pool.query(`SELECT tasker_id FROM gigs WHERE id = $1`, [id]);
+    if (!gigRow.rows[0]) return res.status(404).json({ error: "Gig not found" });
+    if (callerId !== gigRow.rows[0].tasker_id) return res.status(403).json({ error: "Forbidden" });
+
     const result = await pool.query(
       `UPDATE gigs SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
       [is_active, id]
     );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Gig not found" });
-    }
 
     res.status(200).json(result.rows[0]);
   } catch (error) {
@@ -571,16 +578,18 @@ exports.toggleGigStatus = async (req, res) => {
 // Delete a gig
 exports.deleteGig = async (req, res) => {
   const { id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
 
   try {
+    const gigRow = await pool.query(`SELECT tasker_id FROM gigs WHERE id = $1`, [id]);
+    if (!gigRow.rows[0]) return res.status(404).json({ error: "Gig not found" });
+    if (callerId !== gigRow.rows[0].tasker_id) return res.status(403).json({ error: "Forbidden" });
+
     const result = await pool.query(
       `DELETE FROM gigs WHERE id = $1 RETURNING *`,
       [id]
     );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Gig not found" });
-    }
 
     await deleteGigFromSearch(id);
 

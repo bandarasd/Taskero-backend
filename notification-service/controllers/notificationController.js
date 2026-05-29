@@ -93,13 +93,29 @@ exports.markAllRead = async (req, res) => {
 };
 
 // Create a notification (called internally by other services via x-internal-key)
+// idempotency_key: optional deduplication key (e.g. "task_id:type")
 exports.createNotification = async (req, res) => {
-  const { user_id, title, body, type, data } = req.body;
+  const { user_id, title, body, type, data, idempotency_key } = req.body;
   try {
-    const result = await pool.query(
-      `INSERT INTO notifications (user_id, title, body, type, data) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [user_id, title, body, type, data || {}]
-    );
+    let result;
+    if (idempotency_key) {
+      result = await pool.query(
+        `INSERT INTO notifications (user_id, title, body, type, data, idempotency_key)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (idempotency_key) DO NOTHING
+         RETURNING *`,
+        [user_id, title, body, type, data || {}, idempotency_key]
+      );
+      if (!result.rows[0]) {
+        // Already exists — return 200 to indicate idempotent success
+        return res.status(200).json({ deduplicated: true });
+      }
+    } else {
+      result = await pool.query(
+        `INSERT INTO notifications (user_id, title, body, type, data) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [user_id, title, body, type, data || {}]
+      );
+    }
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error("Error creating notification:", error);

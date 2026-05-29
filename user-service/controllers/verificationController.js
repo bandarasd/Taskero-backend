@@ -3,13 +3,9 @@ const pool = require("../db");
 // Submit verification documents
 exports.submitVerification = async (req, res) => {
   try {
-    // For now, using user ID from params since auth might not be implemented yet
-    const userId = req.params.userId || req.user?.id;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
     const { documentType } = req.body;
-
-    if (!userId) {
-      return res.status(400).json({ error: "User ID is required" });
-    }
 
     // Validate document type
     const validTypes = ["ID", "Passport", "Utility Bill"];

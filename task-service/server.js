@@ -44,6 +44,7 @@ app.use(errorHandler);
 
 // Auto-cancel quotes that have passed their expiry deadline
 const EXPIRY_INTERVAL_MS = 60 * 1000; // run every minute
+let quoteExpiryFailures = 0;
 setInterval(async () => {
   try {
     const result = await pool.query(
@@ -52,16 +53,22 @@ setInterval(async () => {
          AND quote_expires_at IS NOT NULL
          AND quote_expires_at < NOW()`
     );
+    quoteExpiryFailures = 0;
     if (result.rowCount > 0) {
       console.log(`[quote-expiry] Auto-cancelled ${result.rowCount} expired quote(s)`);
     }
   } catch (err) {
-    console.error("[quote-expiry] Error running expiry job:", err.message);
+    quoteExpiryFailures++;
+    console.error(`[quote-expiry] Error (failure ${quoteExpiryFailures}):`, err.message);
+    if (quoteExpiryFailures >= 5) {
+      console.error("[quote-expiry] CRITICAL: 5 consecutive failures — check DB connection");
+    }
   }
 }, EXPIRY_INTERVAL_MS);
 
 
 // Hourly: apply late visit penalty to tasks that missed their promised_visit_date
+let latePenaltyFailures = 0;
 setInterval(async () => {
   try {
     const overdue = await pool.query(`
@@ -82,11 +89,16 @@ setInterval(async () => {
       );
     }
 
+    latePenaltyFailures = 0;
     if (overdue.rows.length > 0) {
       console.log(`[late-penalty] Updated penalty for ${overdue.rows.length} overdue task(s)`);
     }
   } catch (err) {
-    console.error("[late-penalty] Error:", err.message);
+    latePenaltyFailures++;
+    console.error(`[late-penalty] Error (failure ${latePenaltyFailures}):`, err.message);
+    if (latePenaltyFailures >= 3) {
+      console.error("[late-penalty] CRITICAL: 3 consecutive failures — check DB connection");
+    }
   }
 }, 60 * 60 * 1000);
 

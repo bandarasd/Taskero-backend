@@ -16,9 +16,10 @@ async function callInternal(url) {
 
 // Create a new task
 exports.createTask = async (req, res) => {
+  const customer_id = req.user?.id;
+  if (!customer_id) return res.status(401).json({ error: "Unauthorized" });
   const {
     gig_id,
-    customer_id,
     tasker_id: provided_tasker_id,
     title,
     category,
@@ -225,6 +226,8 @@ exports.getTasksForCustomer = async (req, res) => {
 // Tasker submits a price quote for a pending task
 exports.submitQuote = async (req, res) => {
   const { id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
   const { price, due_date, is_direct_accept } = req.body;
   if (!price || isNaN(price) || Number(price) <= 0) {
     return res.status(400).json({ error: "A valid price is required" });
@@ -239,6 +242,10 @@ exports.submitQuote = async (req, res) => {
       return res.status(404).json({ error: "Task not found" });
     }
     const task = taskResult.rows[0];
+    if (callerId !== task.tasker_id) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "Only the assigned tasker can submit a quote" });
+    }
     if (task.status !== "pending") {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "Task is not in pending status" });
@@ -246,16 +253,30 @@ exports.submitQuote = async (req, res) => {
 
     const newDueDate = due_date || null;
 
-    const result = await client.query(
-      `UPDATE tasks
-       SET status = 'quoted',
-           quoted_price = $1,
-           due_date = COALESCE($2::timestamptz, due_date),
-           quoted_at = NOW(),
-           quote_expires_at = NOW() + INTERVAL '24 hours'
-       WHERE id = $3 RETURNING *`,
-      [Number(price), newDueDate, id]
-    );
+    // When is_direct_accept, skip the 'quoted' state and go straight to 'accepted'.
+    // This avoids requiring the tasker to call respondToQuote on their own task.
+    const result = is_direct_accept
+      ? await client.query(
+          `UPDATE tasks
+           SET status = 'accepted',
+               quoted_price = $1,
+               final_price = $1,
+               due_date = COALESCE($2::timestamptz, due_date),
+               quoted_at = NOW(),
+               accepted_at = NOW()
+           WHERE id = $3 RETURNING *`,
+          [Number(price), newDueDate, id]
+        )
+      : await client.query(
+          `UPDATE tasks
+           SET status = 'quoted',
+               quoted_price = $1,
+               due_date = COALESCE($2::timestamptz, due_date),
+               quoted_at = NOW(),
+               quote_expires_at = NOW() + INTERVAL '24 hours'
+           WHERE id = $3 RETURNING *`,
+          [Number(price), newDueDate, id]
+        );
 
     await client.query("COMMIT");
 
@@ -293,21 +314,31 @@ exports.submitQuote = async (req, res) => {
 // Customer accepts or rejects a tasker's quote
 exports.respondToQuote = async (req, res) => {
   const { id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
   const { action, is_direct_accept } = req.body; // "accept" or "reject"
   if (!["accept", "reject"].includes(action)) {
     return res.status(400).json({ error: "Action must be 'accept' or 'reject'" });
   }
+  const client = await pool.connect();
   try {
-    const task = await pool.query(`SELECT * FROM tasks WHERE id = $1`, [id]);
+    await client.query("BEGIN");
+    const task = await client.query(`SELECT * FROM tasks WHERE id = $1 FOR UPDATE`, [id]);
     if (task.rows.length === 0) {
+      await client.query("ROLLBACK");
       return res.status(404).json({ error: "Task not found" });
     }
+    if (callerId !== task.rows[0].customer_id) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "Only the task customer can respond to a quote" });
+    }
     if (task.rows[0].status !== "quoted") {
+      await client.query("ROLLBACK");
       return res.status(400).json({ error: "Task is not in quoted status" });
     }
     let result;
     if (action === "accept") {
-      result = await pool.query(
+      result = await client.query(
         `UPDATE tasks SET status = 'accepted', final_price = quoted_price, accepted_at = NOW() WHERE id = $1 RETURNING *`,
         [id]
       );
@@ -324,7 +355,7 @@ exports.respondToQuote = async (req, res) => {
         });
       }
     } else {
-      result = await pool.query(
+      result = await client.query(
         `UPDATE tasks SET status = 'cancelled' WHERE id = $1 RETURNING *`,
         [id]
       );
@@ -337,10 +368,14 @@ exports.respondToQuote = async (req, res) => {
         data: { task_id: updated.id },
       });
     }
+    await client.query("COMMIT");
     return res.status(200).json(result.rows[0]);
   } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     console.error("Error responding to quote:", error);
     return res.status(500).json({ error: "Internal server error" });
+  } finally {
+    client.release();
   }
 };
 
@@ -419,6 +454,8 @@ exports.getNextBooking = async (req, res) => {
 // Tasker manually reports they are running late; notifies the next booked customer
 exports.reportRunningLate = async (req, res) => {
   const { id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
   const { extra_minutes } = req.body;
 
   if (!extra_minutes || isNaN(extra_minutes) || Number(extra_minutes) <= 0) {
@@ -429,6 +466,7 @@ exports.reportRunningLate = async (req, res) => {
     const taskResult = await pool.query(`SELECT * FROM tasks WHERE id = $1`, [id]);
     if (!taskResult.rows.length) return res.status(404).json({ error: "Task not found" });
     const task = taskResult.rows[0];
+    if (callerId !== task.tasker_id) return res.status(403).json({ error: "Forbidden" });
 
     const newEta = new Date(Date.now() + Number(extra_minutes) * 60 * 1000);
 
@@ -490,6 +528,8 @@ exports.reportRunningLate = async (req, res) => {
 // Customer responds to a delay notification: wait, cancel, or reschedule
 exports.respondToDelay = async (req, res) => {
   const { id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
   const { action } = req.body;
 
   if (!['wait', 'cancel', 'reschedule'].includes(action)) {
@@ -500,6 +540,7 @@ exports.respondToDelay = async (req, res) => {
     const taskResult = await pool.query(`SELECT * FROM tasks WHERE id = $1`, [id]);
     if (!taskResult.rows.length) return res.status(404).json({ error: "Task not found" });
     const task = taskResult.rows[0];
+    if (callerId !== task.customer_id) return res.status(403).json({ error: "Forbidden" });
 
     if (action === 'cancel') {
       await pool.query(
@@ -598,8 +639,23 @@ exports.expireStaleRequests = async (req, res) => {
 
 exports.updateTaskStatus = async (req, res) => {
   const { id } = req.params;
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
   const { status, final_price, progress, accepted_at, completed_at } = req.body;
   try {
+    // Ownership check: load task first
+    const taskCheck = await pool.query(`SELECT customer_id, tasker_id FROM tasks WHERE id = $1`, [id]);
+    if (!taskCheck.rows[0]) return res.status(404).json({ error: "Task not found" });
+    const { customer_id, tasker_id } = taskCheck.rows[0];
+    const isTasker = callerId === tasker_id;
+    const isCustomer = callerId === customer_id;
+    if (!isTasker && !isCustomer) return res.status(403).json({ error: "Forbidden" });
+    // Customers can only cancel or complete; taskers drive other transitions
+    const customerAllowed = ["cancelled", "completed"];
+    if (isCustomer && !isTasker && !customerAllowed.includes(status)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     const startedAtExpr = status === 'in_progress' ? 'COALESCE(started_at, NOW())' : 'started_at';
     const completedAtExpr = status === 'completed' ? 'COALESCE(completed_at, NOW())' : 'completed_at';
     const result = await pool.query(
@@ -689,5 +745,111 @@ exports.updateTaskStatus = async (req, res) => {
   } catch (error) {
     console.error("Error updating task status:", error);
     return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+// Cancel an accepted task (customer or worker). Uses FOR UPDATE to prevent race conditions.
+exports.cancelTask = async (req, res) => {
+  const callerId = req.user?.id;
+  if (!callerId) return res.status(401).json({ error: "Unauthorized" });
+
+  const { id } = req.params;
+  const { cancelled_by, reason } = req.body;
+
+  if (!cancelled_by || !["customer", "worker"].includes(cancelled_by)) {
+    return res.status(400).json({ error: "cancelled_by must be 'customer' or 'worker'" });
+  }
+  if (!reason || typeof reason !== "string") {
+    return res.status(400).json({ error: "reason is required" });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const result = await client.query(
+      `SELECT * FROM tasks WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    if (!result.rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Task not found" });
+    }
+    const task = result.rows[0];
+
+    // Verify caller is a party to this task
+    if (callerId !== task.customer_id && callerId !== task.tasker_id) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    // Only accepted tasks can be cancelled through this endpoint
+    if (task.status !== "accepted") {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Task is no longer in a cancellable state" });
+    }
+
+    await client.query(
+      `UPDATE tasks SET status = 'cancelled', cancelled_by = $2, cancelled_at = NOW(),
+        cancellation_reason = $3, updated_at = NOW() WHERE id = $1`,
+      [id, cancelled_by, reason]
+    );
+
+    await client.query("COMMIT");
+
+    if (cancelled_by === "worker") {
+      // Full refund for customer
+      callInternal(`${PAYMENT_SERVICE_URL}/payments/refund/${id}`);
+      // Increment worker cancellation count
+      callInternal(`${USER_SERVICE_URL}/users/${task.tasker_id}/increment-cancellations`);
+      notifyUser({
+        user_id: task.customer_id,
+        title: "Booking Cancelled",
+        body: "Your tasker had to cancel this booking. You will receive a full refund.",
+        type: "cancellation",
+        data: { task_id: id },
+        idempotency_key: `cancel-customer-${id}`,
+      });
+      notifyUser({
+        user_id: task.tasker_id,
+        title: "Booking Cancelled",
+        body: `You cancelled the booking for "${task.title}". Your cancellation count has been updated.`,
+        type: "cancellation",
+        data: { task_id: id },
+        idempotency_key: `cancel-worker-self-${id}`,
+      });
+    } else {
+      // 80% refund for customer cancellation (card only)
+      if (task.payment_method === "card") {
+        callInternal(`${PAYMENT_SERVICE_URL}/payments/partial-refund/${id}`);
+      }
+      notifyUser({
+        user_id: task.customer_id,
+        title: "Booking Cancelled",
+        body:
+          task.payment_method === "card"
+            ? "You cancelled this booking. An 80% refund will be processed to your card."
+            : "You cancelled this booking.",
+        type: "cancellation",
+        data: { task_id: id },
+        idempotency_key: `cancel-customer-self-${id}`,
+      });
+      notifyUser({
+        user_id: task.tasker_id,
+        title: "Booking Cancelled",
+        body: `The customer cancelled the booking for "${task.title}".`,
+        type: "cancellation",
+        data: { task_id: id },
+        idempotency_key: `cancel-tasker-${id}`,
+      });
+    }
+
+    return res.status(200).json({ cancelled: true, task_id: id, cancelled_by, reason });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Error cancelling task:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  } finally {
+    client.release();
   }
 };

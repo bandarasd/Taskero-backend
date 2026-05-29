@@ -11,7 +11,8 @@ async function isCertifiedCategory(category) {
 // Worker: submit certification request for a category
 exports.submitCertification = async (req, res) => {
   try {
-    const userId = req.params.userId;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
     const { category } = req.body;
 
     if (!category) {
