@@ -1,7 +1,9 @@
 FROM node:20-alpine
 WORKDIR /app
-COPY package*.json ./
+COPY api-gateway/package*.json ./
 RUN npm ci --omit=dev
-COPY . .
+COPY shared/ ../shared/
+COPY serviceAccountKey.json ../serviceAccountKey.json
+COPY api-gateway/ .
 EXPOSE 3000
 CMD ["node", "server.js"]

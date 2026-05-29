@@ -1,0 +1,105 @@
+services:
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - USER_SERVICE_URL=http://user-service:3001
+      - TASK_SERVICE_URL=http://task-service:3002
+      - CHAT_SERVICE_URL=http://chat-service:3003
+      - PAYMENT_SERVICE_URL=http://payment-service:3004
+      - SEARCH_SERVICE_URL=http://search-service:3005
+      - GIG_SEARCH_SERVICE_URL=http://search-service:3005
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3006
+      - EMAIL_SERVICE_URL=http://email-service:3007
+    depends_on:
+      - user-service
+      - task-service
+      - chat-service
+      - payment-service
+      - search-service
+      - notification-service
+      - email-service
+
+  user-service:
+    build:
+      context: .
+      dockerfile: user-service/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - TASK_SERVICE_URL=http://task-service:3002
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3006
+
+  task-service:
+    build:
+      context: .
+      dockerfile: task-service/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3002
+      - USER_SERVICE_URL=http://user-service:3001
+      - PAYMENT_SERVICE_URL=http://payment-service:3004
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3006
+
+  chat-service:
+    build:
+      context: .
+      dockerfile: chat-service/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3003
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: payment-service/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3004
+      - USER_SERVICE_URL=http://user-service:3001
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3006
+
+  search-service:
+    build:
+      context: .
+      dockerfile: search-service/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3005
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3006
+
+  email-service:
+    build:
+      context: .
+      dockerfile: email-service/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3007
