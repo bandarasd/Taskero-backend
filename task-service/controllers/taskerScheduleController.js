@@ -16,7 +16,7 @@ exports.getSchedule = async (req, res) => {
 };
 
 // PUT /taskers/:tasker_id/schedule
-// Body: [{ day_of_week, start_time, end_time, buffer_minutes, is_active }]
+// Body: [{ day_of_week, morning_available, afternoon_available, evening_available, is_active }]
 exports.upsertSchedule = async (req, res) => {
   const { tasker_id } = req.params;
   const days = req.body;
@@ -30,23 +30,29 @@ exports.upsertSchedule = async (req, res) => {
     await client.query("BEGIN");
     const results = [];
     for (const day of days) {
-      const { day_of_week, start_time, end_time, buffer_minutes = 30, is_active = true } = day;
-      if (day_of_week === undefined || !start_time || !end_time) {
+      const {
+        day_of_week,
+        morning_available = true,
+        afternoon_available = true,
+        evening_available = true,
+        is_active = true,
+      } = day;
+      if (day_of_week === undefined) {
         await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Each entry requires day_of_week, start_time, end_time" });
+        return res.status(400).json({ error: "Each entry requires day_of_week" });
       }
       const row = await client.query(
-        `INSERT INTO tasker_schedules (tasker_id, day_of_week, start_time, end_time, buffer_minutes, is_active)
+        `INSERT INTO tasker_schedules (tasker_id, day_of_week, morning_available, afternoon_available, evening_available, is_active)
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (tasker_id, day_of_week)
          DO UPDATE SET
-           start_time = EXCLUDED.start_time,
-           end_time = EXCLUDED.end_time,
-           buffer_minutes = EXCLUDED.buffer_minutes,
+           morning_available = EXCLUDED.morning_available,
+           afternoon_available = EXCLUDED.afternoon_available,
+           evening_available = EXCLUDED.evening_available,
            is_active = EXCLUDED.is_active,
            updated_at = NOW()
          RETURNING *`,
-        [tasker_id, day_of_week, start_time, end_time, buffer_minutes, is_active]
+        [tasker_id, day_of_week, morning_available, afternoon_available, evening_available, is_active]
       );
       results.push(row.rows[0]);
     }
@@ -62,6 +68,7 @@ exports.upsertSchedule = async (req, res) => {
 };
 
 // GET /taskers/:tasker_id/available-slots?date=YYYY-MM-DD
+// Returns which time preferences (morning/afternoon/evening) are available for a given date.
 exports.getAvailableSlots = async (req, res) => {
   const { tasker_id } = req.params;
   const { date } = req.query;
@@ -74,83 +81,68 @@ exports.getAvailableSlots = async (req, res) => {
     const targetDate = new Date(date + "T00:00:00Z");
     const dayOfWeek = targetDate.getUTCDay(); // 0=Sun…6=Sat
 
-    // Get tasker's schedule for this day
     const scheduleResult = await pool.query(
-      `SELECT * FROM tasker_schedules WHERE tasker_id = $1 AND day_of_week = $2 AND is_active = true`,
+      `SELECT morning_available, afternoon_available, evening_available, is_active
+       FROM tasker_schedules
+       WHERE tasker_id = $1 AND day_of_week = $2`,
       [tasker_id, dayOfWeek]
     );
 
-    if (scheduleResult.rows.length === 0) {
+    if (scheduleResult.rows.length === 0 || !scheduleResult.rows[0].is_active) {
       return res.status(200).json({
-        schedule: null,
-        available_slots: [],
-        booked_slots: [],
+        available: false,
+        morning: false,
+        afternoon: false,
+        evening: false,
         message: "Tasker is not available on this day",
       });
     }
 
-    const schedule = scheduleResult.rows[0];
-    const bufferMinutes = schedule.buffer_minutes;
+    const s = scheduleResult.rows[0];
 
-    // Parse HH:MM times into minutes-since-midnight
-    const parseTime = (t) => {
-      const [h, m] = t.split(":").map(Number);
-      return h * 60 + m;
-    };
-    const startMin = parseTime(schedule.start_time);
-    const endMin = parseTime(schedule.end_time);
-
-    // Get quoted/accepted/in_progress tasks — expired quotes are treated as freed
-    const tasksResult = await pool.query(
-      `SELECT scheduled_at, estimated_duration_minutes
-       FROM tasks
+    // Find slots blocked by accepted/in_progress/completed tasks
+    const bookedResult = await pool.query(
+      `SELECT time_preference FROM tasks
        WHERE tasker_id = $1
-         AND status IN ('quoted', 'accepted', 'in_progress')
-         AND scheduled_at IS NOT NULL
-         AND scheduled_at::date = $2::date
-         AND (quote_expires_at IS NULL OR quote_expires_at > NOW())`,
+         AND DATE(scheduled_at) = $2::date
+         AND status IN ('accepted', 'in_progress', 'completed')
+         AND time_preference IS NOT NULL`,
       [tasker_id, date]
     );
+    const bookedSlots = new Set(bookedResult.rows.map(r => r.time_preference));
 
-    // Build booked intervals [startMin, endMin) in minutes-since-midnight
-    const bookedIntervals = tasksResult.rows.map((t) => {
-      const d = new Date(t.scheduled_at);
-      const taskStartMin = d.getUTCHours() * 60 + d.getUTCMinutes();
-      const duration = t.estimated_duration_minutes || 60;
-      return { start: taskStartMin, end: taskStartMin + duration + bufferMinutes };
-    });
-
-    // Generate slots every 30 min within schedule window
-    const SLOT_INTERVAL = 30;
-    const availableSlots = [];
-    const bookedSlots = [];
-
-    for (let slotStart = startMin; slotStart + SLOT_INTERVAL <= endMin; slotStart += SLOT_INTERVAL) {
-      const slotEnd = slotStart + SLOT_INTERVAL;
-      const overlaps = bookedIntervals.some(
-        (b) => slotStart < b.end && slotEnd > b.start
-      );
-      const hh = String(Math.floor(slotStart / 60)).padStart(2, "0");
-      const mm = String(slotStart % 60).padStart(2, "0");
-      const label = `${hh}:${mm}`;
-      if (overlaps) {
-        bookedSlots.push(label);
-      } else {
-        availableSlots.push(label);
-      }
+    // Count pending tasks per slot so customers can see "Full" slots
+    const pendingResult = await pool.query(
+      `SELECT time_preference, COUNT(*) AS cnt FROM tasks
+       WHERE tasker_id = $1
+         AND DATE(scheduled_at) = $2::date
+         AND status = 'pending'
+         AND time_preference IS NOT NULL
+       GROUP BY time_preference`,
+      [tasker_id, date]
+    );
+    const pendingCounts = {};
+    for (const row of pendingResult.rows) {
+      pendingCounts[row.time_preference] = parseInt(row.cnt);
     }
 
+    const morning   = s.morning_available   && !bookedSlots.has('morning');
+    const afternoon = s.afternoon_available && !bookedSlots.has('afternoon');
+    const evening   = s.evening_available   && !bookedSlots.has('evening');
+
     return res.status(200).json({
-      schedule: {
-        start_time: schedule.start_time,
-        end_time: schedule.end_time,
-        buffer_minutes: bufferMinutes,
+      available: morning || afternoon || evening,
+      morning,
+      afternoon,
+      evening,
+      pending_count: {
+        morning:   pendingCounts['morning']   ?? 0,
+        afternoon: pendingCounts['afternoon'] ?? 0,
+        evening:   pendingCounts['evening']   ?? 0,
       },
-      available_slots: availableSlots,
-      booked_slots: bookedSlots,
     });
   } catch (error) {
-    console.error("Error fetching available slots:", error);
+    console.error("Error fetching available time preferences:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 };

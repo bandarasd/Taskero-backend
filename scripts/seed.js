@@ -418,6 +418,12 @@ async function seedUsers(client) {
   return { workerIds, customerIds };
 }
 
+const DEFAULT_VISIT_TIERS = JSON.stringify([
+  { label: "Standard", days: 7, surcharge_type: "percent", surcharge_value: 0 },
+  { label: "Fast", days: 3, surcharge_type: "flat", surcharge_value: 1000 },
+  { label: "Urgent", days: 1, surcharge_type: "percent", surcharge_value: 30 },
+]);
+
 async function seedGigs(client, workerIds) {
   console.log("Seeding gigs...");
   const gigIds = {}; // category -> [{id, taskerId}]
@@ -435,13 +441,13 @@ async function seedGigs(client, workerIds) {
       const gigImages = [images[i % images.length], images[(i + 1) % images.length]].filter(Boolean);
       const res = await client.query(
         `INSERT INTO gigs (tasker_id, title, description, category, base_price, tags,
-           service_area_lat, service_area_lng, service_area_radius_km, is_active, attachments)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10)
+           service_area_lat, service_area_lng, service_area_radius_km, is_active, attachments, visit_tiers)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10,$11)
          RETURNING id`,
         [
           worker.id, gig.title, gig.desc, category, gig.price,
           gig.tags, loc.lat, loc.lng, worker.radius,
-          JSON.stringify(gigImages),
+          JSON.stringify(gigImages), DEFAULT_VISIT_TIERS,
         ]
       );
       if (!gigIds[category]) gigIds[category] = [];
@@ -476,12 +482,12 @@ async function seedExistingTaskerGigs(client) {
       const gigImages = [images[i % images.length], images[(i + 1) % images.length]].filter(Boolean);
       await client.query(
         `INSERT INTO gigs (tasker_id, title, description, category, base_price, tags,
-           service_area_lat, service_area_lng, service_area_radius_km, is_active, attachments)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10)`,
+           service_area_lat, service_area_lng, service_area_radius_km, is_active, attachments, visit_tiers)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10,$11)`,
         [
           EXISTING_TASKER_ID, gig.title, gig.desc, category, gig.price,
           gig.tags, loc.lat, loc.lng, 15,
-          JSON.stringify(gigImages),
+          JSON.stringify(gigImages), DEFAULT_VISIT_TIERS,
         ]
       );
       count++;
@@ -514,27 +520,29 @@ async function seedTasks(client, workerIds, customerIds, gigIds) {
   console.log("Seeding tasks...");
   const taskRows = [];
 
+  const TIME_PREFS = ["morning", "afternoon", "evening"];
+
   const taskDefs = [
     // pending
-    { cat: "Cleaning", custIdx: 0, workerIdx: 0, status: "pending", price: 3500, details: { home_size: "Medium", bedrooms: "3", cleaning_type: "Deep clean" } },
-    { cat: "Plumbing", custIdx: 1, workerIdx: 2, status: "pending", price: 2500, details: { issue_type: "Leaking kitchen tap", urgency: "Standard" } },
-    { cat: "Gardening", custIdx: 2, workerIdx: 18, status: "pending", price: 1500, details: {} },
+    { cat: "Cleaning", custIdx: 0, workerIdx: 0, status: "pending", price: 3500, tier: "Standard", tierDays: 7, surcharge: 0, timePref: "morning", details: { home_size: "Medium", bedrooms: "3", cleaning_type: "Deep clean" } },
+    { cat: "Plumbing", custIdx: 1, workerIdx: 2, status: "pending", price: 2500, tier: "Fast", tierDays: 3, surcharge: 1000, timePref: "afternoon", details: { issue_type: "Leaking kitchen tap", urgency: "Standard" } },
+    { cat: "Gardening", custIdx: 2, workerIdx: 18, status: "pending", price: 1500, tier: "Standard", tierDays: 7, surcharge: 0, timePref: "evening", details: {} },
     // accepted
-    { cat: "Painting", custIdx: 3, workerIdx: 6, status: "accepted", price: 6000, details: { num_rooms: "2", paint_supplied_by: "Worker" } },
-    { cat: "Moving", custIdx: 4, workerIdx: 16, status: "accepted", price: 12000, details: { property_size: "2 Beds", floor: "1", elevator_available: "No", packing_needed: "Yes" } },
-    { cat: "Laundry", custIdx: 5, workerIdx: 4, status: "accepted", price: 1200, details: { num_loads: "3", service_type: "Wash & fold" } },
+    { cat: "Painting", custIdx: 3, workerIdx: 6, status: "accepted", price: 6000, tier: "Standard", tierDays: 7, surcharge: 0, timePref: "morning", details: { num_rooms: "2", paint_supplied_by: "Worker" } },
+    { cat: "Moving", custIdx: 4, workerIdx: 16, status: "accepted", price: 12000, tier: "Urgent", tierDays: 1, surcharge: 3600, timePref: "morning", details: { property_size: "2 Beds", floor: "1", elevator_available: "No", packing_needed: "Yes" } },
+    { cat: "Laundry", custIdx: 5, workerIdx: 4, status: "accepted", price: 1200, tier: "Standard", tierDays: 7, surcharge: 0, timePref: "afternoon", details: { num_loads: "3", service_type: "Wash & fold" } },
     // in_progress
-    { cat: "Electrician", custIdx: 0, workerIdx: 10, status: "in_progress", price: 1500, details: { issue_desc: "Install 3 ceiling fans", num_fixtures: "3" } },
-    { cat: "Assembly", custIdx: 1, workerIdx: 12, status: "in_progress", price: 1800, details: {} },
-    { cat: "Repairing", custIdx: 2, workerIdx: 8, status: "in_progress", price: 2000, details: {} },
+    { cat: "Electrician", custIdx: 0, workerIdx: 10, status: "in_progress", price: 1500, tier: "Fast", tierDays: 3, surcharge: 1000, timePref: "morning", details: { issue_desc: "Install 3 ceiling fans", num_fixtures: "3" } },
+    { cat: "Assembly", custIdx: 1, workerIdx: 12, status: "in_progress", price: 1800, tier: "Standard", tierDays: 7, surcharge: 0, timePref: "afternoon", details: {} },
+    { cat: "Repairing", custIdx: 2, workerIdx: 8, status: "in_progress", price: 2000, tier: "Standard", tierDays: 7, surcharge: 0, timePref: "evening", details: {} },
     // completed
-    { cat: "Cleaning", custIdx: 3, workerIdx: 1, status: "completed", price: 3500, details: { home_size: "Large", bedrooms: "4", cleaning_type: "Regular" } },
-    { cat: "Carpentry", custIdx: 4, workerIdx: 14, status: "completed", price: 15000, details: {} },
-    { cat: "Plumbing", custIdx: 5, workerIdx: 3, status: "completed", price: 4000, details: { issue_type: "Install new shower", urgency: "Standard" } },
-    { cat: "Painting", custIdx: 0, workerIdx: 7, status: "completed", price: 12000, details: { num_rooms: "4", paint_supplied_by: "Me" } },
+    { cat: "Cleaning", custIdx: 3, workerIdx: 1, status: "completed", price: 3500, tier: "Standard", tierDays: 7, surcharge: 0, timePref: "morning", details: { home_size: "Large", bedrooms: "4", cleaning_type: "Regular" } },
+    { cat: "Carpentry", custIdx: 4, workerIdx: 14, status: "completed", price: 15000, tier: "Fast", tierDays: 3, surcharge: 1000, timePref: "afternoon", details: {} },
+    { cat: "Plumbing", custIdx: 5, workerIdx: 3, status: "completed", price: 4000, tier: "Standard", tierDays: 7, surcharge: 0, timePref: "morning", details: { issue_type: "Install new shower", urgency: "Standard" } },
+    { cat: "Painting", custIdx: 0, workerIdx: 7, status: "completed", price: 12000, tier: "Urgent", tierDays: 1, surcharge: 3600, timePref: "afternoon", details: { num_rooms: "4", paint_supplied_by: "Me" } },
     // cancelled
-    { cat: "General", custIdx: 1, workerIdx: 21, status: "cancelled", price: 1000, details: {} },
-    { cat: "Moving", custIdx: 2, workerIdx: 17, status: "cancelled", price: 3000, details: { property_size: "Studio", floor: "2", elevator_available: "Yes", packing_needed: "No" } },
+    { cat: "General", custIdx: 1, workerIdx: 21, status: "cancelled", price: 1000, tier: "Standard", tierDays: 7, surcharge: 0, timePref: "morning", details: {} },
+    { cat: "Moving", custIdx: 2, workerIdx: 17, status: "cancelled", price: 3000, tier: "Standard", tierDays: 7, surcharge: 0, timePref: "evening", details: { property_size: "Studio", floor: "2", elevator_available: "Yes", packing_needed: "No" } },
   ];
 
   for (const t of taskDefs) {
@@ -542,14 +550,19 @@ async function seedTasks(client, workerIds, customerIds, gigIds) {
     const customer = customerIds[t.custIdx];
     const gig = gigIds[t.cat]?.[0];
     const loc = LOCATIONS[customer.loc];
+    const promisedDate = new Date();
+    promisedDate.setDate(promisedDate.getDate() + t.tierDays);
+    const promisedDateStr = promisedDate.toISOString().split("T")[0];
 
     const res = await client.query(
       `INSERT INTO tasks (gig_id, customer_id, tasker_id, title, description, status,
-         estimated_price, category, details, location_address, location_lat, location_lng,
-         scheduled_at, completed_at, accepted_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+         category, details, location_address, location_lat, location_lng,
+         scheduled_at, completed_at, accepted_at,
+         time_preference, selected_tier_label, selected_tier_days,
+         surcharge_amount, promised_visit_date)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
          NOW() + interval '2 days',
-         $13, $14)
+         $12, $13, $14, $15, $16, $17, $18)
        RETURNING id`,
       [
         gig?.id ?? null,
@@ -558,13 +571,17 @@ async function seedTasks(client, workerIds, customerIds, gigIds) {
         `${t.cat} Job`,
         `Seed task for ${t.cat} category.`,
         t.status,
-        t.price,
         t.cat,
         JSON.stringify(t.details),
         `${loc.city}, Sri Lanka`,
         loc.lat, loc.lng,
         t.status === "completed" ? new Date() : null,
         ["accepted", "in_progress", "completed"].includes(t.status) ? new Date() : null,
+        t.timePref,
+        t.tier,
+        t.tierDays,
+        t.surcharge,
+        promisedDateStr,
       ]
     );
     taskRows.push({ id: res.rows[0].id, ...t, customer, worker });

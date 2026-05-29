@@ -76,10 +76,35 @@ exports.createGig = async (req, res) => {
     category,
     subcategory,
     base_price,
-    delivery_time,
+    visit_tiers,
     tags,
     attachments,
   } = req.body;
+
+  // Validate and parse visit_tiers
+  let parsedVisitTiers = null;
+  if (visit_tiers !== undefined) {
+    try {
+      parsedVisitTiers = Array.isArray(visit_tiers) ? visit_tiers : JSON.parse(visit_tiers);
+    } catch {
+      return res.status(400).json({ error: "visit_tiers must be a valid JSON array" });
+    }
+    if (!Array.isArray(parsedVisitTiers) || parsedVisitTiers.length === 0) {
+      return res.status(400).json({ error: "visit_tiers must be a non-empty array" });
+    }
+    for (const tier of parsedVisitTiers) {
+      if (!tier.label || typeof tier.days !== 'number' || tier.days < 1) {
+        return res.status(400).json({ error: "Each visit tier must have a label and positive days value" });
+      }
+      if (!['percent', 'flat'].includes(tier.surcharge_type) || typeof tier.surcharge_value !== 'number' || tier.surcharge_value < 0) {
+        return res.status(400).json({ error: "Each visit tier must have surcharge_type ('percent'|'flat') and surcharge_value >= 0" });
+      }
+    }
+    const baselines = parsedVisitTiers.filter(t => t.surcharge_value === 0);
+    if (baselines.length !== 1) {
+      return res.status(400).json({ error: "Exactly one visit tier must have surcharge_value of 0 (the baseline tier)" });
+    }
+  }
 
   // Parse tags: accept JSON array string or comma-separated string
   let parsedTags = null;
@@ -125,8 +150,11 @@ exports.createGig = async (req, res) => {
       areaRadius = areaRadius ?? tasker?.service_radius_km ?? null;
     }
 
+    const defaultTiers = [{ label: 'Standard', days: 7, surcharge_type: 'percent', surcharge_value: 0 }];
+    const tiersToInsert = parsedVisitTiers ?? defaultTiers;
+
     const result = await pool.query(
-      `INSERT INTO gigs (tasker_id, title, description, category, subcategory, base_price, delivery_time, tags, attachments, service_area_lat, service_area_lng, service_area_radius_km)
+      `INSERT INTO gigs (tasker_id, title, description, category, subcategory, base_price, visit_tiers, tags, attachments, service_area_lat, service_area_lng, service_area_radius_km)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [
         tasker_id,
@@ -135,7 +163,7 @@ exports.createGig = async (req, res) => {
         category,
         subcategory,
         base_price || null,
-        delivery_time || null,
+        JSON.stringify(tiersToInsert),
         parsedTags,
         JSON.stringify(attachmentURLs),
         areaLat,
@@ -362,7 +390,7 @@ exports.updateGig = async (req, res) => {
     category,
     subcategory,
     base_price,
-    delivery_time,
+    visit_tiers,
     tags,
     existingAttachments,
     service_area_lat,
@@ -370,9 +398,34 @@ exports.updateGig = async (req, res) => {
     service_area_radius_km,
   } = req.body;
 
+  // Validate visit_tiers if provided
+  let parsedVisitTiers = undefined;
+  if (visit_tiers !== undefined) {
+    try {
+      parsedVisitTiers = Array.isArray(visit_tiers) ? visit_tiers : JSON.parse(visit_tiers);
+    } catch {
+      return res.status(400).json({ error: "visit_tiers must be a valid JSON array" });
+    }
+    if (!Array.isArray(parsedVisitTiers) || parsedVisitTiers.length === 0) {
+      return res.status(400).json({ error: "visit_tiers must be a non-empty array" });
+    }
+    for (const tier of parsedVisitTiers) {
+      if (!tier.label || typeof tier.days !== 'number' || tier.days < 1) {
+        return res.status(400).json({ error: "Each visit tier must have a label and positive days value" });
+      }
+      if (!['percent', 'flat'].includes(tier.surcharge_type) || typeof tier.surcharge_value !== 'number' || tier.surcharge_value < 0) {
+        return res.status(400).json({ error: "Each visit tier must have surcharge_type ('percent'|'flat') and surcharge_value >= 0" });
+      }
+    }
+    const baselines = parsedVisitTiers.filter(t => t.surcharge_value === 0);
+    if (baselines.length !== 1) {
+      return res.status(400).json({ error: "Exactly one visit tier must have surcharge_value of 0 (the baseline tier)" });
+    }
+  }
+
   try {
     const currentRow = await pool.query(
-      `SELECT tasker_id, title, description, category, subcategory, base_price, delivery_time, tags, attachments
+      `SELECT tasker_id, title, description, category, subcategory, base_price, visit_tiers, tags, attachments
        FROM gigs WHERE id = $1`,
       [id]
     );
@@ -442,13 +495,13 @@ exports.updateGig = async (req, res) => {
     const finalCategory = category ?? current.category;
     const finalSubcategory = subcategory ?? current.subcategory;
     const finalBasePrice = base_price !== undefined ? base_price : current.base_price;
-    const finalDeliveryTime = delivery_time !== undefined ? delivery_time : current.delivery_time;
+    const finalVisitTiers = parsedVisitTiers !== undefined ? parsedVisitTiers : current.visit_tiers;
     const finalTags = tags !== undefined ? tags : current.tags;
 
     const result = await pool.query(
       `UPDATE gigs
        SET title = $1, description = $2, category = $3, subcategory = $4,
-           base_price = $5, delivery_time = $6, tags = $7, attachments = $8,
+           base_price = $5, visit_tiers = $6, tags = $7, attachments = $8,
            service_area_lat = $9, service_area_lng = $10, service_area_radius_km = $11,
            updated_at = NOW()
        WHERE id = $12 RETURNING *`,
@@ -458,7 +511,7 @@ exports.updateGig = async (req, res) => {
         finalCategory,
         finalSubcategory,
         finalBasePrice !== null ? finalBasePrice : null,
-        finalDeliveryTime !== null ? finalDeliveryTime : null,
+        JSON.stringify(finalVisitTiers),
         finalTags !== null ? finalTags : null,
         JSON.stringify(finalAttachments),
         finalAreaLat,

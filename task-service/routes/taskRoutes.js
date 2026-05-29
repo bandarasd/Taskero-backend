@@ -11,12 +11,15 @@ const {
   reportRunningLate,
   respondToDelay,
   getNextBooking,
+  getConflicts,
+  expireStaleRequests,
 } = require("../controllers/taskController");
 const verifyFirebaseToken = require("../../shared/middleware/auth");
 const { uploadTaskPhotos } = require("../middlewares/taskUploadMiddleware");
 
 const router = express.Router();
 
+router.post("/expire-stale", verifyFirebaseToken, expireStaleRequests);
 router.post("/", verifyFirebaseToken, uploadTaskPhotos, createTask);
 router.get("/tasker/:tasker_id", verifyFirebaseToken, getTasksByTasker);
 router.get("/customer/:customer_id", verifyFirebaseToken, getTasksForCustomer);
@@ -26,6 +29,7 @@ router.put("/:id/quote", verifyFirebaseToken, submitQuote);
 router.put("/:id/quote/respond", verifyFirebaseToken, respondToQuote);
 router.patch("/:id/attachments", verifyFirebaseToken, uploadTaskPhotos, addTaskAttachments);
 router.get("/:id/next-booking", verifyFirebaseToken, getNextBooking);
+router.get("/:id/conflicts", verifyFirebaseToken, getConflicts);
 router.post("/:id/running-late", verifyFirebaseToken, reportRunningLate);
 router.post("/:id/delay-response", verifyFirebaseToken, respondToDelay);
 

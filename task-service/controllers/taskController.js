@@ -30,9 +30,11 @@ exports.createTask = async (req, res) => {
     scheduled_at,
     base_price,
     payment_method,
+    time_preference,
+    selected_tier_label,
   } = req.body;
   try {
-    const gig = await pool.query(`SELECT tasker_id FROM gigs WHERE id = $1`, [
+    const gig = await pool.query(`SELECT tasker_id, visit_tiers FROM gigs WHERE id = $1`, [
       gig_id,
     ]);
     if (gig.rows.length === 0) {
@@ -40,6 +42,41 @@ exports.createTask = async (req, res) => {
     }
 
     const tasker_id = provided_tasker_id || gig.rows[0].tasker_id;
+
+    // Enforce max 2 pending requests per slot
+    if (scheduled_at && time_preference) {
+      const slotCount = await pool.query(
+        `SELECT COUNT(*) FROM tasks
+         WHERE tasker_id = $1
+           AND DATE(scheduled_at) = $2::date
+           AND time_preference = $3
+           AND status = 'pending'`,
+        [tasker_id, scheduled_at, time_preference]
+      );
+      if (parseInt(slotCount.rows[0].count) >= 2) {
+        return res.status(409).json({ error: "This slot is at full capacity. Please choose another time." });
+      }
+    }
+
+    // Resolve visit tier
+    const visitTiers = gig.rows[0].visit_tiers || [{ label: 'Standard', days: 7, surcharge_type: 'percent', surcharge_value: 0 }];
+    const selectedTier = selected_tier_label
+      ? visitTiers.find(t => t.label === selected_tier_label)
+      : visitTiers.find(t => t.surcharge_value === 0);
+    const tier = selectedTier || visitTiers[0];
+
+    const tierDays = tier.days;
+    const promisedDate = new Date();
+    promisedDate.setDate(promisedDate.getDate() + tierDays);
+    const promised_visit_date = promisedDate.toISOString().split('T')[0];
+
+    const effectiveBasePrice = base_price ?? null;
+    let surcharge_amount = 0;
+    if (tier.surcharge_value > 0 && effectiveBasePrice != null) {
+      surcharge_amount = tier.surcharge_type === 'percent'
+        ? parseFloat(effectiveBasePrice) * tier.surcharge_value / 100
+        : tier.surcharge_value;
+    }
 
     const uploadedPhotos = req.files ? req.files.map((f) => f.path) : [];
     let existingAttachments = [];
@@ -60,8 +97,10 @@ exports.createTask = async (req, res) => {
       `INSERT INTO tasks(
         gig_id, customer_id, tasker_id, title, category, notes, details,
         location_address, location_lat, location_lng, scheduled_at,
-        base_price, attachments, status, payment_method
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14) RETURNING *`,
+        base_price, attachments, status, payment_method,
+        time_preference, selected_tier_label, selected_tier_days,
+        surcharge_amount, promised_visit_date
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14,$15,$16,$17,$18,$19) RETURNING *`,
       [
         gig_id,
         customer_id,
@@ -74,9 +113,14 @@ exports.createTask = async (req, res) => {
         location_latitude ?? null,
         location_longitude ?? null,
         scheduled_at || null,
-        base_price ?? null,
+        effectiveBasePrice,
         attachments,
         payment_method || 'cash',
+        time_preference || null,
+        tier.label,
+        tierDays,
+        surcharge_amount > 0 ? surcharge_amount : null,
+        promised_visit_date,
       ]
     );
 
@@ -181,14 +225,10 @@ exports.getTasksForCustomer = async (req, res) => {
 // Tasker submits a price quote for a pending task
 exports.submitQuote = async (req, res) => {
   const { id } = req.params;
-  const { price, estimated_duration_minutes, due_date } = req.body;
+  const { price, due_date, is_direct_accept } = req.body;
   if (!price || isNaN(price) || Number(price) <= 0) {
     return res.status(400).json({ error: "A valid price is required" });
   }
-  if (!estimated_duration_minutes || isNaN(estimated_duration_minutes) || Number(estimated_duration_minutes) <= 0) {
-    return res.status(400).json({ error: "estimated_duration_minutes is required" });
-  }
-  const durationMin = Number(estimated_duration_minutes);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -204,53 +244,41 @@ exports.submitQuote = async (req, res) => {
       return res.status(400).json({ error: "Task is not in pending status" });
     }
 
-    // Block the slot: check for overlapping quoted/accepted/in_progress tasks
-    if (task.scheduled_at) {
-      const conflict = await client.query(
-        `SELECT id FROM tasks
-         WHERE tasker_id = $1
-           AND id != $2
-           AND status IN ('quoted', 'accepted', 'in_progress')
-           AND scheduled_at IS NOT NULL
-           AND scheduled_at < ($3::timestamptz + ($4 || ' minutes')::interval)
-           AND (scheduled_at + (COALESCE(estimated_duration_minutes, 60) || ' minutes')::interval) > $3::timestamptz
-         FOR UPDATE`,
-        [task.tasker_id, id, task.scheduled_at, durationMin]
-      );
-      if (conflict.rows.length > 0) {
-        await client.query("ROLLBACK");
-        return res.status(409).json({ error: "You already have a booking that overlaps this time slot." });
-      }
-    }
-
     const newDueDate = due_date || null;
 
     const result = await client.query(
       `UPDATE tasks
        SET status = 'quoted',
            quoted_price = $1,
-           estimated_duration_minutes = $2,
-           due_date = COALESCE($3::timestamptz, due_date),
+           due_date = COALESCE($2::timestamptz, due_date),
            quoted_at = NOW(),
-           quote_expires_at = CASE
-             WHEN scheduled_at IS NOT NULL
-               THEN LEAST(NOW() + INTERVAL '24 hours', scheduled_at - INTERVAL '2 hours')
-             ELSE NOW() + INTERVAL '24 hours'
-           END
-       WHERE id = $4 RETURNING *`,
-      [Number(price), durationMin, newDueDate, id]
+           quote_expires_at = NOW() + INTERVAL '24 hours'
+       WHERE id = $3 RETURNING *`,
+      [Number(price), newDueDate, id]
     );
 
     await client.query("COMMIT");
 
     const updated = result.rows[0];
-    notifyUser({
-      user_id: updated.customer_id,
-      title: "You Got a Quote!",
-      body: `Your tasker sent a quote of $${Number(price).toFixed(2)}. Tap to review and respond.`,
-      type: "quote",
-      data: { task_id: updated.id },
-    });
+    if (is_direct_accept) {
+      notifyUser({
+        user_id: updated.customer_id,
+        title: "Tasker Accepted Your Request!",
+        body: updated.scheduled_at
+          ? `Your tasker accepted your request. Task scheduled for ${new Date(updated.scheduled_at).toLocaleDateString()}.`
+          : "Your tasker accepted your request and is ready to help!",
+        type: "quote",
+        data: { task_id: updated.id },
+      });
+    } else {
+      notifyUser({
+        user_id: updated.customer_id,
+        title: "You Got a Quote!",
+        body: `Your tasker sent a quote of Rs. ${Number(price).toFixed(2)}. Tap to review and respond.`,
+        type: "quote",
+        data: { task_id: updated.id },
+      });
+    }
 
     return res.status(200).json(updated);
   } catch (error) {
@@ -265,7 +293,7 @@ exports.submitQuote = async (req, res) => {
 // Customer accepts or rejects a tasker's quote
 exports.respondToQuote = async (req, res) => {
   const { id } = req.params;
-  const { action } = req.body; // "accept" or "reject"
+  const { action, is_direct_accept } = req.body; // "accept" or "reject"
   if (!["accept", "reject"].includes(action)) {
     return res.status(400).json({ error: "Action must be 'accept' or 'reject'" });
   }
@@ -284,15 +312,17 @@ exports.respondToQuote = async (req, res) => {
         [id]
       );
       const updated = result.rows[0];
-      notifyUser({
-        user_id: updated.tasker_id,
-        title: "Quote Accepted!",
-        body: updated.scheduled_at
-          ? `Your quote was accepted. Task scheduled for ${new Date(updated.scheduled_at).toLocaleDateString()}.`
-          : "Your quote was accepted. Get ready for the task!",
-        type: "quote",
-        data: { task_id: updated.id },
-      });
+      if (!is_direct_accept) {
+        notifyUser({
+          user_id: updated.tasker_id,
+          title: "Quote Accepted!",
+          body: updated.scheduled_at
+            ? `Your quote was accepted. Task scheduled for ${new Date(updated.scheduled_at).toLocaleDateString()}.`
+            : "Your quote was accepted. Get ready for the task!",
+          type: "quote",
+          data: { task_id: updated.id },
+        });
+      }
     } else {
       result = await pool.query(
         `UPDATE tasks SET status = 'cancelled' WHERE id = $1 RETURNING *`,
@@ -507,6 +537,65 @@ exports.respondToDelay = async (req, res) => {
   }
 };
 
+// GET /tasks/:id/conflicts — returns pending tasks competing for the same tasker/date/slot
+exports.getConflicts = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const taskResult = await pool.query(
+      `SELECT tasker_id, scheduled_at, time_preference, status FROM tasks WHERE id = $1`,
+      [id]
+    );
+    if (!taskResult.rows.length) return res.status(404).json({ error: "Task not found" });
+    const task = taskResult.rows[0];
+
+    if (task.status !== 'pending' || !task.scheduled_at || !task.time_preference) {
+      return res.status(200).json({ count: 0, tasks: [] });
+    }
+
+    const conflicts = await pool.query(
+      `SELECT t.id, u.first_name, u.last_name
+       FROM tasks t
+       LEFT JOIN users u ON u.id = t.customer_id
+       WHERE t.tasker_id = $1
+         AND DATE(t.scheduled_at) = DATE($2::timestamptz)
+         AND t.time_preference = $3
+         AND t.status = 'pending'
+         AND t.id != $4`,
+      [task.tasker_id, task.scheduled_at, task.time_preference, id]
+    );
+
+    return res.status(200).json({ count: conflicts.rows.length, tasks: conflicts.rows });
+  } catch (err) {
+    console.error("Error in getConflicts:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+// POST /tasks/expire-stale — mark pending tasks older than 24h as 'expired' and notify customers
+exports.expireStaleRequests = async (req, res) => {
+  try {
+    const expired = await pool.query(
+      `UPDATE tasks SET status = 'expired'
+       WHERE status = 'pending'
+         AND created_at < NOW() - INTERVAL '24 hours'
+       RETURNING id, customer_id, gig_id, tasker_id`
+    );
+    for (const t of expired.rows) {
+      notifyUser({
+        user_id: t.customer_id,
+        title: "Booking Request Expired",
+        body: "The tasker didn't respond in time. Tap to rebook with another tasker.",
+        type: "booking_expired",
+        data: { task_id: t.id, gig_id: t.gig_id, tasker_id: t.tasker_id },
+      });
+    }
+    return res.status(200).json({ expired: expired.rowCount });
+  } catch (err) {
+    console.error("Error in expireStaleRequests:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 exports.updateTaskStatus = async (req, res) => {
   const { id } = req.params;
   const { status, final_price, progress, accepted_at, completed_at } = req.body;
@@ -523,11 +612,50 @@ exports.updateTaskStatus = async (req, res) => {
 
     const updated = result.rows[0];
 
+    // When a task is accepted, auto-decline any other pending tasks for the same tasker/date/slot
+    if (status === "accepted" && updated.scheduled_at && updated.time_preference) {
+      const conflicts = await pool.query(
+        `UPDATE tasks SET status = 'declined'
+         WHERE tasker_id = $1
+           AND DATE(scheduled_at) = DATE($2::timestamptz)
+           AND time_preference = $3
+           AND status = 'pending'
+           AND id != $4
+         RETURNING id, customer_id, gig_id, tasker_id`,
+        [updated.tasker_id, updated.scheduled_at, updated.time_preference, updated.id]
+      );
+      for (const ct of conflicts.rows) {
+        notifyUser({
+          user_id: ct.customer_id,
+          title: "Booking Slot Taken",
+          body: "The tasker accepted another request for this slot. Tap to choose a new date or time.",
+          type: "booking_declined",
+          data: { task_id: ct.id, gig_id: ct.gig_id, tasker_id: ct.tasker_id },
+        });
+      }
+    }
+
     if (status === "payment_pending") {
+      // Apply late penalty to final price before requesting payment
+      let displayPrice = updated.final_price ?? updated.quoted_price;
+      const penaltyPct = parseFloat(updated.late_penalty_percent) || 0;
+      if (penaltyPct > 0 && displayPrice != null) {
+        const penaltyAmt = parseFloat(displayPrice) * penaltyPct / 100;
+        const reducedPrice = parseFloat(displayPrice) - penaltyAmt;
+        await pool.query(
+          `UPDATE tasks SET final_price = $1, late_penalty_amount = $2 WHERE id = $3`,
+          [reducedPrice.toFixed(2), penaltyAmt.toFixed(2), updated.id]
+        );
+        displayPrice = reducedPrice;
+        // Trigger refund for card payments (penalty discount)
+        if (updated.payment_method === 'card') {
+          callInternal(`${PAYMENT_SERVICE_URL}/payments/refund/${updated.id}`);
+        }
+      }
       notifyUser({
         user_id: updated.customer_id,
-        title: "Job Done — Payment Required",
-        body: `Your tasker has finished the job. Please confirm payment of Rs. ${updated.final_price ?? updated.quoted_price ?? ''}.`,
+        title: penaltyPct > 0 ? `Job Done — Late Penalty Applied (${penaltyPct}% off)` : "Job Done — Payment Required",
+        body: `Your tasker has finished the job. Please confirm payment of Rs. ${Math.round(displayPrice) ?? ''}.`,
         type: "status",
         data: { task_id: updated.id },
       });
