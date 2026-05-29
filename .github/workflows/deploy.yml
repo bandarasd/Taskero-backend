@@ -15,21 +15,21 @@ jobs:
       matrix:
         service:
           - name: api-gateway
-            context: api-gateway
+            dockerfile: api-gateway/Dockerfile
           - name: user-service
-            context: user-service
+            dockerfile: user-service/Dockerfile
           - name: task-service
-            context: task-service
+            dockerfile: task-service/Dockerfile
           - name: chat-service
-            context: chat-service
+            dockerfile: chat-service/Dockerfile
           - name: payment-service
-            context: payment-service
+            dockerfile: payment-service/Dockerfile
           - name: search-service
-            context: search-service
+            dockerfile: search-service/Dockerfile
           - name: notification-service
-            context: notification-service
+            dockerfile: notification-service/Dockerfile
           - name: email-service
-            context: email-service
+            dockerfile: email-service/Dockerfile
 
     steps:
       - uses: actions/checkout@v4.2.2
@@ -43,7 +43,8 @@ jobs:
       - name: Build and push ${{ matrix.service.name }}
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.service.context }}
+          context: .
+          file: ${{ matrix.service.dockerfile }}
           push: true
           tags: |
             ${{ env.REGISTRY }}/taskero-${{ matrix.service.name }}:latest
